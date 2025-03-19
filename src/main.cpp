@@ -21,6 +21,11 @@ int main(int argc, char *argv[]) {
 	config.port = 8080;
 	config.threadCount = 4;
 	config.enableDirectoryIndexing = true;
+	config.accessLog = {
+		.enabled = true,
+		.path = "access.log",
+		.maxSizeBytes = 10 * 1024 * 1024
+	};
 
 	ou::http::Server server(config);
 	if (!server.init()) {

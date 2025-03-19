@@ -39,7 +39,7 @@ namespace {
 
 namespace ou::http {
 
-Server::Server(Config config) : config_(std::move(config)) {}
+Server::Server(Config config) : config_(config), accessLogger(config.accessLog) {}
 
 Server::~Server() {
 	stop();
@@ -139,6 +139,7 @@ void Server::workerThread(int serverSocket) {
 			std::string responseStr = response->serialize();
 			LOG_INFO("Sending response: %d %s", response->statusCode, response->reasonPhrase.c_str());
 			send(clientSocket, responseStr.c_str(), responseStr.size(), 0);
+			accessLogger.log(request, *response, clientAddr);
 		} else {
 			LOG_WARN("No response generated for request: %s %s", request.method.c_str(), request.path.c_str());
 		}

@@ -20,3 +20,5 @@ Makefile
 *.dylib
 *.a
 *.lib
+
+*.log

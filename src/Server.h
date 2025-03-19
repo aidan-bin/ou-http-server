@@ -1,6 +1,7 @@
 #pragma once
 
 #include "HttpTypes.h"
+#include "Logging.h"
 
 #include <string>
 #include <vector>
@@ -19,6 +20,7 @@ public:
 		uint16_t port = 8080;
 		int threadCount = 4;
 		bool enableDirectoryIndexing = false;
+		AccessLog::Config accessLog;
 	};
 
 	explicit Server(Config config);
@@ -36,6 +38,8 @@ private:
 	std::atomic<bool> running_{false};
 	std::vector<std::thread> threads_;
 	std::vector<int> sockets_; // One per worker thread
+
+	AccessLog accessLogger;
 };
 
 } // namespace ou::http
