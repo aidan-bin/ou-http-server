@@ -1,0 +1,13 @@
+version: "3.8"
+
+services:
+  server:
+    build: .
+    container_name: toy_http_server
+    volumes:
+      - .:/app  # Mount project directory into the container
+    working_dir: /app
+    ports:
+      - "8080:8080"
+    # Default command is set to keep the container running; override as needed
+    command: ["tail", "-f", "/dev/null"]

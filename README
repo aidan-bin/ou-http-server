@@ -1,0 +1,76 @@
+# Toy HTTP Server
+
+This is a toy HTTP server implemented in C++ using modern STL features.
+
+Unit tests (using Boost.Test) are included, along with a sample driver program.
+
+Docker support is provided to build/run using containers.
+
+## Setup
+
+### Dependencies
+
+- **C++20**
+- **CMake**
+- **Boost.Test**
+- **cppcheck** (optional)
+- **Docker** (optional)
+- **Docker Compose** (optional)
+
+### macOS setup (using Homebrew)
+
+```
+brew install cmake
+brew install boost
+brew install cppcheck
+brew install --cask docker
+```
+
+### Linux setup
+
+```
+sudo apt update
+sudo apt install -y build-essential cmake cppcheck libboost-test-dev
+```
+
+## Building the project
+
+### Python script
+
+```
+chmod +x server.py
+
+./server.py build
+
+./server.py run
+
+./server.py test
+
+./server.py docker-build
+
+./server.py docker-run
+```
+
+### Manual
+
+```
+mkdir build && cd build
+cmake ..
+
+make
+./toy_http_server
+
+ctest --verbose
+```
+
+### Docker Compose
+
+```
+docker-compose up --build
+
+docker-compose run server ./server.py test
+
+docker exec -it toy_http_server bash
+
+docker-compose down
+```
