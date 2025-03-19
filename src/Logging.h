@@ -21,7 +21,7 @@ public:
 		size_t maxSizeBytes;
 	};
 
-    explicit AccessLog(Config config);
+    explicit AccessLog(const Config& config);
 	~AccessLog() = default;
 
     void log(const Request& request, const Response& response, const sockaddr_in& clientAddr);

@@ -22,3 +22,5 @@ Makefile
 *.lib
 
 *.log
+
+certs/*

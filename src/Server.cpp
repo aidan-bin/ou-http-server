@@ -39,7 +39,17 @@ namespace {
 
 namespace ou::http {
 
-Server::Server(Config config) : config_(config), accessLogger(config.accessLog) {}
+Server::Server(const Config& config)
+	: config_(config), accessLogger(config_.accessLog) {
+#ifndef DISABLE_HTTPS
+	if (config_.https.enabled) {
+		socketHandler_ = std::make_unique<SSLSocketHandler>(config_.https);
+	} else 
+#endif
+	{
+		socketHandler_ = std::make_unique<PlainSocketHandler>();
+	}
+}
 
 Server::~Server() {
 	stop();
@@ -122,11 +132,17 @@ void Server::workerThread(int serverSocket) {
 
 		LOG_INFO("Accepted connection from %s", inet_ntoa(clientAddr.sin_addr));
 
+		if (!socketHandler_->acceptConnection(clientSocket)) {
+			close(clientSocket);
+			continue;
+		}
+
 		char buffer[4096] = {0};
-		ssize_t bytesRead = read(clientSocket, buffer, sizeof(buffer));
+		ssize_t bytesRead = socketHandler_->read(clientSocket, buffer, sizeof(buffer));
+
 		if (bytesRead <= 0) {
 			LOG_WARN("Failed to read request from client %s", inet_ntoa(clientAddr.sin_addr));
-			close(clientSocket);
+			socketHandler_->closeConnection(clientSocket);
 			continue;
 		}
 
@@ -138,13 +154,13 @@ void Server::workerThread(int serverSocket) {
 		if (response) {
 			std::string responseStr = response->serialize();
 			LOG_INFO("Sending response: %d %s", response->statusCode, response->reasonPhrase.c_str());
-			send(clientSocket, responseStr.c_str(), responseStr.size(), 0);
+			socketHandler_->write(clientSocket, responseStr);
 			accessLogger.log(request, *response, clientAddr);
 		} else {
 			LOG_WARN("No response generated for request: %s %s", request.method.c_str(), request.path.c_str());
 		}
 
-		close(clientSocket);
+		socketHandler_->closeConnection(clientSocket);
 		LOG_INFO("Closed connection from %s", inet_ntoa(clientAddr.sin_addr));
 	}
 }

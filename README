@@ -13,6 +13,7 @@ Docker support is provided to build/run using containers.
 - **C++20**
 - **CMake**
 - **Boost.Test**
+- **OpenSSL**
 - **cppcheck** (optional)
 - **Docker** (optional)
 - **Docker Compose** (optional)
@@ -22,6 +23,7 @@ Docker support is provided to build/run using containers.
 ```
 brew install cmake
 brew install boost
+brew install openssl
 brew install cppcheck
 brew install --cask docker
 ```
@@ -30,7 +32,7 @@ brew install --cask docker
 
 ```
 sudo apt update
-sudo apt install -y build-essential cmake cppcheck libboost-test-dev
+sudo apt install -y build-essential cmake cppcheck libboost-test-dev libssl-dev
 ```
 
 ## Building the project
@@ -73,4 +75,39 @@ docker-compose run server ./server.py test
 docker exec -it toy_http_server bash
 
 docker-compose down
+```
+
+## HTTPS
+
+A self-signed certificate and key are provided in the `example` directory.
+
+You can generate a certificate with:
+```
+openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 365 -nodes
+```
+
+Only the common name field is required. You can enter `localhost` for local testing.
+
+### Inspecting certificates and keys
+
+To inspect a certificate:
+```
+openssl x509 -in cert.pem -text -noout
+```
+
+To inspect a key:
+```
+openssl rsa -in key.pem -text -noout
+```
+
+To verify if a key matches a certificate:
+```
+openssl x509 -noout -modulus -in cert.pem
+openssl rsa -noout -modulus -in key.pem
+# Should match
+```
+
+To check if a certificate is valid:
+```
+openssl verify cert.pem
 ```

@@ -31,9 +31,9 @@ namespace {
 	}
 }
 
-AccessLog::AccessLog(Config config) : config_(config) {
+AccessLog::AccessLog(const Config& config) : config_(config) {
 	if (config_.enabled) {
-		std::ofstream logFile(config_.path, std::ios::app); // Ensure the file exists
+		std::ofstream logFile(config_.path, std::ios::app);
 	}
 }
 

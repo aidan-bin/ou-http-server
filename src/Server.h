@@ -2,7 +2,10 @@
 
 #include "HttpTypes.h"
 #include "Logging.h"
+#include "SocketHandler.h"
+#include "SSLSocketHandler.h"
 
+#include <atomic>
 #include <string>
 #include <vector>
 #include <thread>
@@ -21,9 +24,12 @@ public:
 		int threadCount = 4;
 		bool enableDirectoryIndexing = false;
 		AccessLog::Config accessLog;
+#ifndef DISABLE_HTTPS
+		SSLSocketHandler::Config https;
+#endif
 	};
 
-	explicit Server(Config config);
+	explicit Server(const Config& config);
 	~Server();
 
 	bool init();
@@ -40,6 +46,8 @@ private:
 	std::vector<int> sockets_; // One per worker thread
 
 	AccessLog accessLogger;
+
+	std::unique_ptr<SocketHandler> socketHandler_;
 };
 
 } // namespace ou::http

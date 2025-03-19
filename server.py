@@ -15,10 +15,14 @@ def run_command(cmd, cwd=None):
 		print(f"Command failed with error: {e}")
 		sys.exit(e.returncode)
 
-def build():
+def build(disable_https):
 	if not os.path.isdir(BUILD_DIR):
 		os.makedirs(BUILD_DIR)
-	run_command(["cmake", ".."], cwd=BUILD_DIR)
+
+	cmake_cmd = ["cmake", ".."]
+	cmake_cmd.append(f"-DDISABLE_HTTPS={'ON' if disable_https else 'OFF'}")
+
+	run_command(cmake_cmd, cwd=BUILD_DIR)
 	run_command(["make"], cwd=BUILD_DIR)
 
 def run_main():
@@ -46,7 +50,9 @@ def main():
 	)
 	subparsers = parser.add_subparsers(dest="command", help="sub-command help")
 
-	subparsers.add_parser("build", help="Build the project locally")
+	build_parser = subparsers.add_parser("build", help="Build the project locally")
+	build_parser.add_argument("--disable-https", action="store_true", help="Disable HTTPS support in the build")
+
 	subparsers.add_parser("run", help="Run the main program locally")
 	subparsers.add_parser("test", help="Run the unit tests locally")
 	subparsers.add_parser("docker-build", help="Build the Docker image")
@@ -55,7 +61,7 @@ def main():
 	args = parser.parse_args()
 
 	if args.command == "build":
-		build()
+		build(args.disable_https)
 	elif args.command == "run":
 		run_main()
 	elif args.command == "test":

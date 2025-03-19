@@ -17,7 +17,7 @@ int main(int argc, char *argv[]) {
 	std::signal(SIGINT, signalHandler);
 
 	ou::http::Server::Config config;
-	config.servingDirectory = "./www";
+	config.servingDirectory = "./example/www";
 	config.port = 8080;
 	config.threadCount = 4;
 	config.enableDirectoryIndexing = true;
@@ -26,6 +26,13 @@ int main(int argc, char *argv[]) {
 		.path = "access.log",
 		.maxSizeBytes = 10 * 1024 * 1024
 	};
+#ifndef DISABLE_HTTPS
+	config.https = {
+		.enabled = true,
+		.certPath = "./example/certs/cert.pem",
+		.keyPath = "./example/certs/key.pem"
+	};
+#endif
 
 	ou::http::Server server(config);
 	if (!server.init()) {
