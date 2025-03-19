@@ -172,6 +172,16 @@ std::optional<Response> Server::handleRequest(const Request& request) {
 
 	if (!std::filesystem::exists(filePath)) {
 		LOG_ERROR("File not found: %s", filePath.string().c_str());
+
+		if (config_.customErrorPage && std::filesystem::exists(*config_.customErrorPage)) {
+			std::ifstream file(*config_.customErrorPage, std::ios::binary);
+			if (file) {
+				std::string body((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+				LOG_INFO("Serving custom error page: %s", config_.customErrorPage->string().c_str());
+				return Response{404, "Not Found", {{"Content-Type", "text/html"}, {"Content-Length", std::to_string(body.size())}}, body};
+			}
+		}
+
 		return Response{404, "Not Found", {{"Content-Type", "text/plain"}}, "404 Not Found"};
 	}
 
@@ -179,16 +189,22 @@ std::optional<Response> Server::handleRequest(const Request& request) {
 		LOG_INFO("Request is a directory: %s", filePath.string().c_str());
 		if (!config_.enableDirectoryIndexing) {
 			LOG_WARN("Directory indexing is disabled, returning 403 Forbidden.");
+
+			if (config_.customErrorPage && std::filesystem::exists(*config_.customErrorPage)) {
+				std::ifstream file(*config_.customErrorPage, std::ios::binary);
+				if (file) {
+					std::string body((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+					LOG_INFO("Serving custom error page: %s", config_.customErrorPage->string().c_str());
+					return Response{403, "Forbidden", {{"Content-Type", "text/html"}, {"Content-Length", std::to_string(body.size())}}, body};
+				}
+			}
+
 			return Response{403, "Forbidden", {{"Content-Type", "text/plain"}}, "403 Forbidden"};
 		}
 
 		std::string indexHtml = sGenerateDirectoryIndex(request.path, filePath);
 		LOG_INFO("Generated directory index for %s", request.path.c_str());
-		return Response{
-			200, "OK",
-			{{"Content-Type", "text/html"}, {"Content-Length", std::to_string(indexHtml.size())}},
-			indexHtml
-		};
+		return Response{200, "OK", {{"Content-Type", "text/html"}, {"Content-Length", std::to_string(indexHtml.size())}}, indexHtml};
 	}
 
 	std::ifstream file(filePath, std::ios::binary);
@@ -199,11 +215,7 @@ std::optional<Response> Server::handleRequest(const Request& request) {
 
 	std::string body((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
 	LOG_INFO("Successfully read file: %s", filePath.string().c_str());
-	return Response{
-		200, "OK",
-		{{"Content-Length", std::to_string(body.size())}, {"Content-Type", "text/plain"}},
-		body
-	};
+	return Response{200, "OK", {{"Content-Length", std::to_string(body.size())}, {"Content-Type", "text/plain"}}, body};
 }
 
 } // namespace ou::http

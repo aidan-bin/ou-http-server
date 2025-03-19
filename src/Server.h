@@ -27,6 +27,7 @@ public:
 #ifndef DISABLE_HTTPS
 		SSLSocketHandler::Config https;
 #endif
+		std::optional<std::filesystem::path> customErrorPage;
 	};
 
 	explicit Server(const Config& config);
