@@ -1,0 +1,16 @@
+BasedOnStyle: LLVM
+UseTab: Always
+TabWidth: 2
+BreakBeforeBraces: Attach
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLambdasOnASingleLine: Inline
+IndentCaseLabels: false
+ColumnLimit: 140
+AccessModifierOffset: -2
+NamespaceIndentation: Inner
+FixNamespaceComments: true
+AlignConsecutiveAssignments: false
+AlignConsecutiveDeclarations: false
+SortIncludes: true
+BreakBeforeBinaryOperators: All
+Cpp11BracedListStyle: false

@@ -1,9 +1,9 @@
 #pragma once
 
-#include <string>
-#include <string_view>
 #include <map>
 #include <sstream>
+#include <string>
+#include <string_view>
 
 namespace ou::http {
 
@@ -14,6 +14,10 @@ struct Request {
 	std::string body;
 
 	static Request parse(std::string_view raw);
+
+private:
+	static std::pair<std::string_view, std::string_view> split_at(std::string_view str, char delimiter);
+	static std::string_view trim(std::string_view str);
 };
 
 struct Response {

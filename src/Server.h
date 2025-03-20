@@ -2,17 +2,17 @@
 
 #include "HttpTypes.h"
 #include "Logging.h"
-#include "SocketHandler.h"
 #include "SSLSocketHandler.h"
+#include "SocketHandler.h"
 
 #include <atomic>
-#include <string>
-#include <vector>
-#include <thread>
-#include <optional>
 #include <filesystem>
 #include <memory>
 #include <netinet/in.h>
+#include <optional>
+#include <string>
+#include <thread>
+#include <vector>
 
 namespace ou::http {
 
@@ -29,7 +29,7 @@ public:
 #endif
 	};
 
-	explicit Server(const Config& config);
+	explicit Server(Config config);
 	~Server();
 
 	bool init();
@@ -38,10 +38,10 @@ public:
 
 private:
 	void workerThread(int serverSocket);
-	std::optional<Response> handleRequest(const Request& request);
+	std::optional<Response> handleRequest(const Request &request) const;
 
 	Config config_;
-	std::atomic<bool> running_{false};
+	std::atomic<bool> running_{ false };
 	std::vector<std::thread> threads_;
 	std::vector<int> sockets_; // One per worker thread
 

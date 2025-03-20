@@ -13,8 +13,8 @@ Docker support is provided to build/run using containers.
 - **C++20**
 - **CMake**
 - **Boost.Test**
-- **OpenSSL**
-- **cppcheck** (optional)
+- **OpenSSL** (optional)
+- **clang-tidy** (optional)
 - **Docker** (optional)
 - **Docker Compose** (optional)
 
@@ -24,7 +24,12 @@ Docker support is provided to build/run using containers.
 brew install cmake
 brew install boost
 brew install openssl
-brew install cppcheck
+
+brew install llvm
+sudo ln -s "$(brew --prefix llvm)/bin/clang-format" "/usr/local/bin/clang-format"
+sudo ln -s "$(brew --prefix llvm)/bin/clang-tidy" "/usr/local/bin/clang-tidy"
+sudo ln -s "$(brew --prefix llvm)/bin/clang-apply-replacements" "/usr/local/bin/clang-apply-replacements"
+
 brew install --cask docker
 ```
 
@@ -32,7 +37,7 @@ brew install --cask docker
 
 ```
 sudo apt update
-sudo apt install -y build-essential cmake cppcheck libboost-test-dev libssl-dev
+sudo apt install -y build-essential cmake clang-tidy libboost-test-dev libssl-dev
 ```
 
 ## Building the project

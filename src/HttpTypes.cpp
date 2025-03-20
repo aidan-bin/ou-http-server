@@ -1,69 +1,55 @@
 #include "HttpTypes.h"
 
-#include <vector>
-#include <cctype>
-#include <utility>
 #include <algorithm>
+#include <cctype>
+#include <ranges>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace ou::http {
 
+std::pair<std::string_view, std::string_view> Request::split_at(std::string_view str, char delimiter) {
+	size_t pos = str.find(delimiter);
+	if (pos == std::string_view::npos)
+		return { str, {} };
+	return { str.substr(0, pos), str.substr(pos + 1) };
+}
+
+std::string_view Request::trim(std::string_view str) {
+	auto isSpace = [](unsigned char ch) {
+		return std::isspace(ch);
+	};
+	str.remove_prefix(std::ranges::distance(str | std::views::take_while(isSpace)));
+	str.remove_suffix(std::ranges::distance(str | std::views::reverse | std::views::take_while(isSpace)));
+	return str;
+}
+
 Request Request::parse(std::string_view raw) {
 	Request req;
-	auto trim = [](std::string_view sv) -> std::string_view {
-		while (!sv.empty() && std::isspace(static_cast<unsigned char>(sv.front())))
-			sv.remove_prefix(1);
-		while (!sv.empty() && std::isspace(static_cast<unsigned char>(sv.back())))
-			sv.remove_suffix(1);
-		return sv;
-	};
+	size_t pos = raw.find("\r\n\r\n");
+	std::string_view headerSection = raw.substr(0, pos);
+	std::string_view bodySection = (pos != std::string_view::npos) ? raw.substr(pos + 4) : "";
 
-	// Split raw request into lines using "\r\n" as delimiter.
-	std::vector<std::string_view> lines;
-	size_t start = 0;
-	while (start < raw.size()) {
-		size_t end = raw.find("\r\n", start);
-		if (end == std::string_view::npos) {
-			lines.push_back(raw.substr(start));
-			break;
-		}
-		lines.push_back(raw.substr(start, end - start));
-		start = end + 2;
+	std::string headerStr(headerSection); // Ensure persistent storage
+	std::istringstream headerStream(headerStr);
+	std::string line;
+
+	if (!std::getline(headerStream, line) || line.empty()) {
+		throw std::runtime_error("Invalid request: missing request line");
 	}
-	if (lines.empty())
-		return req; // malformed
 
-	// Parse request line (first line)
-	std::string_view requestLine = lines.front();
-	size_t firstSpace = requestLine.find(' ');
-	size_t secondSpace = requestLine.find(' ', firstSpace + 1);
-	if (firstSpace == std::string_view::npos || secondSpace == std::string_view::npos)
-		return req; // malformed
-	req.method = std::string(trim(requestLine.substr(0, firstSpace)));
-	req.path = std::string(trim(requestLine.substr(firstSpace + 1, secondSpace - firstSpace - 1)));
-
-	// Parse headers
-	bool headerSection = true;
-	for (auto it = std::next(lines.begin()); it != lines.end(); ++it) {
-		if (headerSection) {
-			if (it->empty()) {
-				headerSection = false;
-				continue;
-			}
-			auto parseHeader = [&trim](std::string_view line) -> std::pair<std::string_view, std::string_view> {
-				size_t colonPos = line.find(':');
-				if (colonPos == std::string_view::npos)
-					return {line, std::string_view{}};
-				return { trim(line.substr(0, colonPos)), trim(line.substr(colonPos + 1)) };
-			};
-			auto [key, value] = parseHeader(*it);
-			if (!key.empty())
-				req.headers[std::string(key)] = std::string(value);
-		} else {
-			if (!req.body.empty())
-				req.body.append("\r\n");
-			req.body.append(std::string(*it));
-		}
+	std::istringstream requestLine(line);
+	if (!(requestLine >> req.method >> req.path)) {
+		throw std::runtime_error("Invalid request line format");
 	}
+
+	while (std::getline(headerStream, line) && !line.empty()) {
+		auto [key, value] = split_at(line, ':');
+		req.headers[std::string(trim(key))] = std::string(trim(value));
+	}
+
+	req.body = std::string(bodySection);
 	return req;
 }
 

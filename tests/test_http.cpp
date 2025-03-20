@@ -1,29 +1,27 @@
 #define BOOST_TEST_MODULE ToyHttpServerTest
 #include <boost/test/included/unit_test.hpp>
 
-#include "Server.h"
 #include "HttpTypes.h"
+#include "Server.h"
 
-#include <string>
-#include <vector>
-#include <thread>
-#include <fstream>
-#include <filesystem>
 #include <chrono>
-#include <sys/socket.h>
+#include <filesystem>
+#include <fstream>
 #include <netinet/in.h>
+#include <string>
+#include <sys/socket.h>
+#include <thread>
 #include <unistd.h>
+#include <vector>
 
 using namespace ou::http;
 
-BOOST_AUTO_TEST_CASE(test_request_parsing)
-{
-	std::string rawRequest =
-		"GET /index.html HTTP/1.1\r\n"
-		"Host: localhost\r\n"
-		"User-Agent: BoostTest\r\n"
-		"\r\n"
-		"Body content";
+BOOST_AUTO_TEST_CASE(test_request_parsing) {
+	std::string rawRequest = "GET /index.html HTTP/1.1\r\n"
+													 "Host: localhost\r\n"
+													 "User-Agent: BoostTest\r\n"
+													 "\r\n"
+													 "Body content";
 
 	Request req = Request::parse(rawRequest);
 	BOOST_CHECK_EQUAL(req.method, "GET");
@@ -33,8 +31,7 @@ BOOST_AUTO_TEST_CASE(test_request_parsing)
 	BOOST_CHECK(req.body.find("Body content") != std::string::npos);
 }
 
-BOOST_AUTO_TEST_CASE(test_response_serialization)
-{
+BOOST_AUTO_TEST_CASE(test_response_serialization) {
 	Response res;
 	res.statusCode = 200;
 	res.reasonPhrase = "OK";

@@ -33,15 +33,14 @@ target_include_directories(http_lib PUBLIC ${CMAKE_SOURCE_DIR}/src)
 add_executable(toy_http_server src/main.cpp)
 target_link_libraries(toy_http_server PRIVATE http_lib ${SSL_LIBS})
 
-find_program(CPPCHECK_EXE NAMES cppcheck)
-if (CPPCHECK_EXE)
-	add_custom_target(run_cppcheck
-		COMMAND ${CPPCHECK_EXE} --enable=all --inconclusive --quiet --error-exitcode=1 --suppress=missingIncludeSystem --check-level=exhaustive --inline-suppr --checkers-report=${CMAKE_BINARY_DIR}/checkers.txt ${CMAKE_SOURCE_DIR}/src
-		COMMENT "Running cppcheck"
-	)
-	add_dependencies(toy_http_server run_cppcheck)
+find_program(CLANG_TIDY_EXECUTABLE NAMES clang-tidy)
+
+if (CLANG_TIDY_EXECUTABLE)
+	message(STATUS "Clang-tidy found, enabling static analysis.")
+	set(CMAKE_CXX_CLANG_TIDY_VERBOSE "ON")
+	set_target_properties(http_lib PROPERTIES CXX_CLANG_TIDY "clang-tidy;-checks=-*,modernize-*,readability-*,cppcoreguidelines-*,performance-*,bugprone-*,-modernize-use-designated-initializers,-*-magic-numbers,-llvmlibc-callee-namespace,-modernize-use-trailing-return-type,-readability-identifier-length,-readability-braces-around-statements,-cppcoreguidelines-pro-type-reinterpret-cast;-use-color;-warnings-as-errors=*")
 else()
-	message(WARNING "Cppcheck not found!")
+	message(WARNING "Clang-tidy not found, skipping static analysis.")
 endif()
 
 add_compile_options(-Wall -Wextra -Werror)

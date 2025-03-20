@@ -1,15 +1,15 @@
-#include "Server.h"
 #include "Logging.h"
+#include "Server.h"
 
+#include <atomic>
+#include <chrono>
 #include <csignal>
 #include <thread>
-#include <chrono>
-#include <atomic>
 
-std::atomic<bool> g_running{true};
+std::atomic<bool> g_running{ true };
 
 void signalHandler(int signum) {
-	LOG_INFO("Interrupt signal (%d) received.", signum);
+	LOG_INFO("Interrupt signal ({}) received", signum);
 	g_running.store(false);
 }
 
@@ -21,28 +21,18 @@ int main(int argc, char *argv[]) {
 	config.port = 8080;
 	config.threadCount = 4;
 	config.enableDirectoryIndexing = true;
-	config.accessLog = {
-		.enabled = true,
-		.path = "access.log",
-		.maxSizeBytes = 10 * 1024 * 1024
-	};
+	config.accessLog = { .enabled = true, .path = "access.log", .maxSizeBytes = 10 * 1024 * 1024 };
 #ifndef DISABLE_HTTPS
-	config.https = {
-		.enabled = true,
-		.certPath = "./example/certs/cert.pem",
-		.keyPath = "./example/certs/key.pem"
-	};
+	config.https = { .enabled = true, .certPath = "./example/certs/cert.pem", .keyPath = "./example/certs/key.pem" };
 #endif
 
 	ou::http::Server server(config);
 	if (!server.init()) {
-		LOG_ERROR("Server initialization failed.");
+		LOG_ERROR("Server initialization failed");
 		return EXIT_FAILURE;
 	}
 
-	std::thread serverThread([&server]() {
-		server.start();
-	});
+	std::thread serverThread([&server]() { server.start(); });
 
 	while (g_running.load()) {
 		std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -53,6 +43,6 @@ int main(int argc, char *argv[]) {
 		serverThread.join();
 	}
 
-	LOG_INFO("Exiting.");
+	LOG_INFO("Exiting");
 	return EXIT_SUCCESS;
 }
