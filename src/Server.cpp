@@ -11,6 +11,7 @@
 #include <unistd.h>
 
 namespace {
+
 std::string sGenerateDirectoryIndex(const std::string &requestPath, const std::filesystem::path &dirPath) {
 	std::stringstream ss;
 	ss << "<!DOCTYPE html><html><head><title>Index of " << requestPath << "</title></head><body>";
@@ -37,11 +38,12 @@ std::string sGenerateDirectoryIndex(const std::string &requestPath, const std::f
 	ss << "</ul></body></html>";
 	return ss.str();
 }
+
 } // namespace
 
 namespace ou::http {
 
-Server::Server(Config config) : config_(std::move(config)), accessLogger(config_.accessLog) {
+Server::Server(Config config) : config_(std::move(config)) {
 #ifndef DISABLE_HTTPS
 	if (config_.https.enabled) {
 		socketHandler_ = std::make_unique<SSLSocketHandler>(config_.https);
@@ -118,6 +120,26 @@ void Server::stop() {
 	LOG_INFO("Server stopped");
 }
 
+void Server::registerPathHandler(Method method, const std::string &path, const std::shared_ptr<RequestHandler> &handler) {
+	routeHandlers_[method][path] = [handler](const Request &req) {
+		return handler->handle(req);
+	};
+}
+
+void Server::registerPathHandler(Method method, const std::string &path, std::function<Response(const Request &)> handler) {
+	routeHandlers_[method][path] = std::move(handler);
+}
+
+void Server::registerPatternHandler(Method method, const std::string &pattern, const std::shared_ptr<RequestHandler> &handler) {
+	patternHandlers_[method].emplace_back(std::regex(pattern), [handler](const Request &req) { return handler->handle(req); });
+}
+
+void Server::registerPatternHandler(Method method, const std::string &pattern, std::function<Response(const Request &)> handler) {
+	patternHandlers_[method].emplace_back(std::regex(pattern), std::move(handler));
+}
+
+void Server::addMiddleware(std::shared_ptr<Middleware> middleware) { middlewares_.push_back(std::move(middleware)); }
+
 void Server::workerThread(int serverSocket) {
 	while (running_.load()) {
 		sockaddr_in clientAddr{};
@@ -146,17 +168,18 @@ void Server::workerThread(int serverSocket) {
 		}
 
 		Request request = Request::parse(std::string_view(buffer.data(), bytesRead));
-		LOG_INFO("Received request: {} {}", request.method.c_str(), request.path.c_str());
+		LOG_INFO("Received request: {} {}", request.method, request.path);
+
+		request.clientAddr = clientAddr;
 
 		auto response = handleRequest(request);
 
 		if (response) {
 			std::string responseStr = response->serialize();
-			LOG_INFO("Sending response: {} {}", response->statusCode, response->reasonPhrase.c_str());
+			LOG_INFO("Sending response: {} {}", response->statusCode, response->reasonPhrase);
 			socketHandler_->write(clientSocket, responseStr);
-			accessLogger.log(request, *response, clientAddr);
 		} else {
-			LOG_WARN("No response generated for request: {} {}", request.method.c_str(), request.path.c_str());
+			LOG_WARN("No response generated for request: {} {}", request.method, request.path);
 		}
 
 		socketHandler_->closeConnection(clientSocket);
@@ -165,35 +188,70 @@ void Server::workerThread(int serverSocket) {
 }
 
 std::optional<Response> Server::handleRequest(const Request &request) const {
+	Request processedRequest = request;
+	Response response;
+	bool handled = false;
+
+	for (const auto &middleware : middlewares_) {
+		if (middleware->process(processedRequest, response)) {
+			handled = true;
+			break;
+		}
+	}
+
+	if (handled)
+		return response;
+
+	auto methodIt = routeHandlers_.find(request.method);
+	if (methodIt != routeHandlers_.end()) {
+		auto handlerIt = methodIt->second.find(request.path);
+		if (handlerIt != methodIt->second.end()) {
+			return handlerIt->second(processedRequest);
+		}
+	}
+
+	auto patternIt = patternHandlers_.find(request.method);
+	if (patternIt != patternHandlers_.end()) {
+		for (const auto &[pattern, handler] : patternIt->second) {
+			if (std::regex_match(request.path, pattern)) {
+				return handler(processedRequest);
+			}
+		}
+	}
+
+	return handleStaticFileRequest(processedRequest);
+}
+
+std::optional<Response> Server::handleStaticFileRequest(const Request &request) const {
 	std::filesystem::path filePath = config_.servingDirectory / (request.path == "/" ? "" : request.path.substr(1));
 
-	LOG_INFO("Handling request for path: {}", request.path.c_str());
+	LOG_INFO("Handling request for path: {}", request.path);
 
 	if (!std::filesystem::exists(filePath)) {
-		LOG_ERROR("File not found: {}", filePath.string().c_str());
+		LOG_ERROR("File not found: {}", filePath.string());
 		return Response{ 404, "Not Found", { { "Content-Type", "text/plain" } }, "404 Not Found" };
 	}
 
 	if (std::filesystem::is_directory(filePath)) {
-		LOG_INFO("Request is a directory: {}", filePath.string().c_str());
+		LOG_INFO("Request is a directory: {}", filePath.string());
 		if (!config_.enableDirectoryIndexing) {
 			LOG_WARN("Directory indexing is disabled, returning 403 Forbidden.");
 			return Response{ 403, "Forbidden", { { "Content-Type", "text/plain" } }, "403 Forbidden" };
 		}
 
 		std::string indexHtml = sGenerateDirectoryIndex(request.path, filePath);
-		LOG_INFO("Generated directory index for {}", request.path.c_str());
+		LOG_INFO("Generated directory index for {}", request.path);
 		return Response{ 200, "OK", { { "Content-Type", "text/html" }, { "Content-Length", std::to_string(indexHtml.size()) } }, indexHtml };
 	}
 
 	std::ifstream file(filePath, std::ios::binary);
 	if (!file) {
-		LOG_ERROR("Failed to open file: {}", filePath.string().c_str());
+		LOG_ERROR("Failed to open file: {}", filePath.string());
 		return Response{ 500, "Internal Server Error", { { "Content-Type", "text/plain" } }, "500 Internal Server Error" };
 	}
 
 	std::string body((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-	LOG_INFO("Successfully read file: {}", filePath.string().c_str());
+	LOG_INFO("Successfully read file: {}", filePath.string());
 	return Response{ 200, "OK", { { "Content-Length", std::to_string(body.size()) }, { "Content-Type", "text/plain" } }, body };
 }
 

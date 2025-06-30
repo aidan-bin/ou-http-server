@@ -21,7 +21,6 @@ int main(int argc, char *argv[]) {
 	config.port = 8080;
 	config.threadCount = 4;
 	config.enableDirectoryIndexing = true;
-	config.accessLog = { .enabled = true, .path = "access.log", .maxSizeBytes = 10 * 1024 * 1024 };
 #ifndef DISABLE_HTTPS
 	config.https = { .enabled = true, .certPath = "./example/certs/cert.pem", .keyPath = "./example/certs/key.pem" };
 #endif
@@ -31,6 +30,9 @@ int main(int argc, char *argv[]) {
 		LOG_ERROR("Server initialization failed");
 		return EXIT_FAILURE;
 	}
+
+	ou::http::AccessLog::Config accessLogConfig = { .path = "access.log", .maxSizeBytes = 10 * 1024 * 1024 };
+	server.addMiddleware(std::make_shared<ou::http::AccessLog>(accessLogConfig));
 
 	std::thread serverThread([&server]() { server.start(); });
 

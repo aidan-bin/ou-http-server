@@ -29,16 +29,9 @@ namespace {
 	}
 } // namespace
 
-AccessLog::AccessLog(Config config) : config_(std::move(config)) {
-	if (config_.enabled) {
-		std::ofstream logFile(config_.path, std::ios::app);
-	}
-}
+AccessLog::AccessLog(Config config) : config_(std::move(config)) { std::ofstream logFile(config_.path, std::ios::app); }
 
 void AccessLog::log(const Request &request, const Response &response, const sockaddr_in &clientAddr) {
-	if (!config_.enabled)
-		return;
-
 	std::ofstream logFile(config_.path, std::ios::app);
 	if (!logFile)
 		return;
@@ -77,6 +70,13 @@ void AccessLog::enforceSizeLimit() const {
 	}
 	tempFile.close();
 	std::filesystem::rename(config_.path.string() + ".tmp", config_.path);
+}
+
+bool AccessLog::process(Request &request, Response &response) {
+	if (request.clientAddr.has_value()) {
+		log(request, response, request.clientAddr.value());
+	}
+	return false;
 }
 
 } // namespace ou::http

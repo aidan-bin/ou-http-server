@@ -9,6 +9,66 @@
 
 namespace ou::http {
 
+inline Method stringToMethod(std::string_view method) {
+	if (method == "GET")
+		return Method::GET;
+	if (method == "POST")
+		return Method::POST;
+	if (method == "PUT")
+		return Method::PUT;
+	if (method == "DELETE")
+		return Method::DELETE;
+	if (method == "PATCH")
+		return Method::PATCH;
+	if (method == "HEAD")
+		return Method::HEAD;
+	if (method == "OPTIONS")
+		return Method::OPTIONS;
+	if (method == "CONNECT")
+		return Method::CONNECT;
+	if (method == "TRACE")
+		return Method::TRACE;
+
+	throw std::invalid_argument("Invalid HTTP method: " + std::string(method));
+}
+
+inline std::string methodToString(Method method) {
+	switch (method) {
+	case Method::GET:
+		return "GET";
+	case Method::POST:
+		return "POST";
+	case Method::PUT:
+		return "PUT";
+	case Method::DELETE:
+		return "DELETE";
+	case Method::PATCH:
+		return "PATCH";
+	case Method::HEAD:
+		return "HEAD";
+	case Method::OPTIONS:
+		return "OPTIONS";
+	case Method::CONNECT:
+		return "CONNECT";
+	case Method::TRACE:
+		return "TRACE";
+	default:
+		return "UNKNOWN";
+	}
+}
+
+std::ostream &operator<<(std::ostream &os, Method method) {
+	os << methodToString(method);
+	return os;
+}
+
+std::istream &operator>>(std::istream &is, Method &method) {
+	std::string token;
+	is >> token;
+	method = stringToMethod(token);
+	return is;
+}
+
 std::pair<std::string_view, std::string_view> Request::split_at(std::string_view str, char delimiter) {
 	size_t pos = str.find(delimiter);
 	if (pos == std::string_view::npos)

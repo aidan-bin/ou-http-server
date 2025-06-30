@@ -1,6 +1,7 @@
 #pragma once
 
 #include "HttpTypes.h"
+#include "Server.h"
 
 #include <cstdio>
 #include <filesystem>
@@ -19,18 +20,21 @@ template <typename... Args> void log_helper(std::string_view format, Args &&...a
 
 namespace ou::http {
 
-class AccessLog {
+class Middleware;
+
+class AccessLog : public Middleware {
 public:
 	struct Config {
-		bool enabled = false;
 		std::filesystem::path path;
 		size_t maxSizeBytes;
 	};
 
 	explicit AccessLog(Config config);
-	~AccessLog() = default;
+	~AccessLog() override = default;
 
 	void log(const Request &request, const Response &response, const sockaddr_in &clientAddr);
+
+	bool process(Request &request, Response &response) override;
 
 private:
 	void enforceSizeLimit() const;
