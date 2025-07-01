@@ -12,6 +12,7 @@
 #include <netinet/in.h>
 #include <optional>
 #include <regex>
+#include <set>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -51,11 +52,18 @@ public:
 	void start();
 	void stop();
 
+	void addMiddleware(std::shared_ptr<Middleware> middleware);
 	void registerPathHandler(Method method, const std::string &path, const std::shared_ptr<RequestHandler> &handler);
 	void registerPathHandler(Method method, const std::string &path, std::function<Response(const Request &)> handler);
 	void registerPatternHandler(Method method, const std::string &pattern, const std::shared_ptr<RequestHandler> &handler);
 	void registerPatternHandler(Method method, const std::string &pattern, std::function<Response(const Request &)> handler);
-	void addMiddleware(std::shared_ptr<Middleware> middleware);
+
+	void registerPathHandler(const std::set<Method> &methods, const std::string &path, const std::shared_ptr<RequestHandler> &handler);
+	void registerPathHandler(const std::set<Method> &methods, const std::string &path,
+													 const std::function<Response(const Request &)> &handler);
+	void registerPatternHandler(const std::set<Method> &methods, const std::string &pattern, const std::shared_ptr<RequestHandler> &handler);
+	void registerPatternHandler(const std::set<Method> &methods, const std::string &pattern,
+															const std::function<Response(const Request &)> &handler);
 
 protected:
 	std::optional<Response> handleRequest(const Request &request) const;

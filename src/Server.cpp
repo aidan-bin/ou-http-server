@@ -120,6 +120,8 @@ void Server::stop() {
 	LOG_INFO("Server stopped");
 }
 
+void Server::addMiddleware(std::shared_ptr<Middleware> middleware) { middlewares_.push_back(std::move(middleware)); }
+
 void Server::registerPathHandler(Method method, const std::string &path, const std::shared_ptr<RequestHandler> &handler) {
 	routeHandlers_[method][path] = [handler](const Request &req) {
 		return handler->handle(req);
@@ -138,7 +140,32 @@ void Server::registerPatternHandler(Method method, const std::string &pattern, s
 	patternHandlers_[method].emplace_back(std::regex(pattern), std::move(handler));
 }
 
-void Server::addMiddleware(std::shared_ptr<Middleware> middleware) { middlewares_.push_back(std::move(middleware)); }
+void Server::registerPathHandler(const std::set<Method> &methods, const std::string &path, const std::shared_ptr<RequestHandler> &handler) {
+	for (const auto &method : methods) {
+		registerPathHandler(method, path, handler);
+	}
+}
+
+void Server::registerPathHandler(const std::set<Method> &methods, const std::string &path,
+																 const std::function<Response(const Request &)> &handler) {
+	for (const auto &method : methods) {
+		registerPathHandler(method, path, handler);
+	}
+}
+
+void Server::registerPatternHandler(const std::set<Method> &methods, const std::string &pattern,
+																		const std::shared_ptr<RequestHandler> &handler) {
+	for (const auto &method : methods) {
+		registerPatternHandler(method, pattern, handler);
+	}
+}
+
+void Server::registerPatternHandler(const std::set<Method> &methods, const std::string &pattern,
+																		const std::function<Response(const Request &)> &handler) {
+	for (const auto &method : methods) {
+		registerPatternHandler(method, pattern, handler);
+	}
+}
 
 void Server::workerThread(int serverSocket) {
 	while (running_.load()) {
