@@ -3,20 +3,34 @@
 
 #include <algorithm>
 #include <array>
-#include <cstring>
+#include <format>
 #include <fstream>
-#include <sstream>
 #include <system_error>
 #include <utility>
 
-#include <arpa/inet.h>
+#include <fcntl.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
 namespace {
 
 constexpr size_t kReadChunkBytes = 4096;
+
+constexpr int kAcceptPollMs = 200;
+constexpr auto kAcceptRetryDelay = std::chrono::milliseconds(10);
+
+bool sSetNonBlocking(int fd, bool enable) {
+	// NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+	const int flags = ::fcntl(fd, F_GETFL, 0);
+	if (flags < 0)
+		return false;
+
+	const int updated = enable ? (flags | O_NONBLOCK) : (flags & ~O_NONBLOCK);
+	// NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+	return ::fcntl(fd, F_SETFL, updated) >= 0;
+}
 
 constexpr std::array<std::pair<std::string_view, std::string_view>, 14> kMimeTypes{ {
 		{ ".html", "text/html" },
@@ -81,10 +95,8 @@ std::string sHtmlEscape(std::string_view text) {
 
 std::string sGenerateDirectoryIndex(const std::string &requestPath, const std::filesystem::path &dirPath, std::error_code &ec) {
 	const std::string escapedPath = sHtmlEscape(requestPath);
-
-	std::stringstream ss;
-	ss << "<!DOCTYPE html><html><head><title>Index of " << escapedPath << "</title></head><body>";
-	ss << "<h1>Index of " << escapedPath << "</h1><ul>";
+	std::string html
+			= std::format("<!DOCTYPE html><html><head><title>Index of {0}</title></head><body><h1>Index of {0}</h1><ul>", escapedPath);
 
 	std::string normalizedPath = requestPath;
 	if (!normalizedPath.ends_with('/'))
@@ -92,22 +104,48 @@ std::string sGenerateDirectoryIndex(const std::string &requestPath, const std::f
 
 	if (requestPath != "/") {
 		const std::string parentPath = normalizedPath.substr(0, normalizedPath.find_last_of('/', normalizedPath.length() - 2) + 1);
-		ss << "<li><a href=\"" << sHtmlEscape(parentPath) << "\">..</a></li>";
+		html += std::format("<li><a href=\"{}\">..</a></li>", ou::http::percentEncode(parentPath));
 	}
 
 	for (const auto &entry : std::filesystem::directory_iterator(dirPath, ec)) {
 		const std::string name = entry.path().filename().string();
-		const bool isDirectory = entry.is_directory(ec);
+		const std::string_view slash = entry.is_directory(ec) ? "/" : "";
 
-		std::string href = normalizedPath + name;
-		if (isDirectory)
-			href += "/";
-
-		ss << "<li><a href=\"" << sHtmlEscape(href) << "\">" << sHtmlEscape(name) << (isDirectory ? "/" : "") << "</a></li>";
+		html += std::format("<li><a href=\"{}{}\">{}{}</a></li>", ou::http::percentEncode(normalizedPath + name), slash, sHtmlEscape(name),
+												slash);
 	}
 
-	ss << "</ul></body></html>";
-	return ss.str();
+	html += "</ul></body></html>";
+	return html;
+}
+
+int sAcceptOne(int serverSocket, sockaddr_in &clientAddr) {
+	pollfd descriptor{ .fd = serverSocket, .events = POLLIN, .revents = 0 };
+
+	const int ready = ::poll(&descriptor, 1, kAcceptPollMs);
+	if (ready == 0) {
+		return -1;
+	}
+
+	if (ready < 0) {
+		if (errno != EINTR)
+			std::this_thread::sleep_for(kAcceptRetryDelay);
+		return -1;
+	}
+
+	socklen_t clientLen = sizeof(clientAddr);
+	const int clientSocket = accept(serverSocket, reinterpret_cast<struct sockaddr *>(&clientAddr), &clientLen);
+	if (clientSocket < 0) {
+		if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK || errno == ECONNABORTED)
+			return -1;
+
+		LOG_WARN("Failed to accept connection: errno {}", errno);
+		std::this_thread::sleep_for(kAcceptRetryDelay);
+		return -1;
+	}
+
+	(void)sSetNonBlocking(clientSocket, false);
+	return clientSocket;
 }
 
 } // namespace
@@ -166,6 +204,12 @@ bool Server::init() {
 			return false;
 		}
 
+		// Non-blocking so the accept loop can poll and notice stop() without being closed out from under it
+		if (!sSetNonBlocking(serverSocket.get(), true)) {
+			LOG_ERROR("Failed to set socket non-blocking");
+			return false;
+		}
+
 		LOG_INFO("Server socket {} bound and listening...", serverSocket.get());
 		sockets.push_back(std::move(serverSocket));
 	}
@@ -189,13 +233,12 @@ void Server::stop() {
 
 	LOG_INFO("Stopping server...");
 
-	sockets_.clear();
-
 	for (std::thread &thread : threads_) {
 		if (thread.joinable())
 			thread.join();
 	}
 	threads_.clear();
+	sockets_.clear();
 
 	LOG_INFO("Server stopped");
 }
@@ -248,15 +291,11 @@ std::variant<Request, int> Server::readRequest(int clientSocket) const {
 	std::string raw;
 	std::array<char, kReadChunkBytes> chunk{};
 
-	struct Pending {
-		Request request;
-		size_t totalSize;
-	};
-
 	size_t headerEnd = std::string::npos;
-	std::optional<Pending> pending;
+	size_t totalSize = 0;
+	std::optional<Request> request;
 
-	while (!pending || raw.size() < pending->totalSize) {
+	while (!request || raw.size() < totalSize) {
 		const ssize_t bytesRead = socketHandler_->read(clientSocket, chunk);
 		if (bytesRead <= 0) {
 			// Timed out, or the peer went away before finishing
@@ -273,24 +312,25 @@ std::variant<Request, int> Server::readRequest(int clientSocket) const {
 				continue;
 		}
 
-		if (!pending) {
-			std::optional<Request> parsed = Request::parse(raw);
-			if (!parsed)
+		if (!request) {
+			request = Request::parse(raw);
+			if (!request)
 				return 400;
 
-			const size_t totalSize = headerEnd + 4 + parsed->contentLength().value_or(0);
+			if (request->header("Transfer-Encoding"))
+				return 501;
+
+			totalSize = headerEnd + 4 + request->contentLength().value_or(0);
 			if (totalSize > config_.maxRequestBytes)
 				return 413;
-
-			pending = Pending{ .request = std::move(*parsed), .totalSize = totalSize };
 		}
 	}
 
 	// Truncate any bytes past Content-Length that arrived in the same read
 	const size_t bodyStart = headerEnd + 4;
-	pending->request.body.assign(raw, bodyStart, pending->totalSize - bodyStart);
+	request->body.assign(raw, bodyStart, totalSize - bodyStart);
 
-	return std::move(pending->request);
+	return std::move(*request);
 }
 
 void Server::handleConnection(int clientSocket, const sockaddr_in &clientAddr) const {
@@ -307,33 +347,27 @@ void Server::handleConnection(int clientSocket, const sockaddr_in &clientAddr) c
 		if (*status == 0)
 			return;
 
-		LOG_WARN("Rejecting request from {} with status {}", inet_ntoa(clientAddr.sin_addr), *status);
+		LOG_WARN("Rejecting request from {} with status {}", addressToString(clientAddr), *status);
 		(void)socketHandler_->write(clientSocket, Response::error(*status).serialize());
 		return;
 	}
 
 	Request request = std::move(std::get<Request>(result));
 	request.clientAddr = clientAddr;
-	LOG_INFO("Received request: {} {}", request.method, request.path);
 
-	const Response response = handleRequest(request);
-	LOG_INFO("Sending response: {}", response.statusCode);
+	const std::string requestLine = std::format("{} {}", request.method, request.path);
+	const Response response = handleRequest(std::move(request));
+	LOG_INFO("{} from {} -> {}", requestLine, addressToString(clientAddr), response.statusCode);
 	(void)socketHandler_->write(clientSocket, response.serialize());
 }
 
 void Server::workerThread(int serverSocket) {
 	while (running_.load()) {
 		sockaddr_in clientAddr{};
-		socklen_t clientLen = sizeof(clientAddr);
 
-		const int clientSocket = accept(serverSocket, reinterpret_cast<struct sockaddr *>(&clientAddr), &clientLen);
-		if (clientSocket < 0) {
-			if (!running_.load())
-				break;
+		const int clientSocket = sAcceptOne(serverSocket, clientAddr);
+		if (clientSocket < 0)
 			continue;
-		}
-
-		LOG_INFO("Accepted connection from {}", inet_ntoa(clientAddr.sin_addr));
 
 		try {
 			handleConnection(clientSocket, clientAddr);
@@ -344,50 +378,49 @@ void Server::workerThread(int serverSocket) {
 		}
 
 		socketHandler_->closeConnection(clientSocket);
-		LOG_INFO("Closed connection from {}", inet_ntoa(clientAddr.sin_addr));
 	}
 }
 
-Response Server::handleRequest(const Request &request) const {
-	Request processedRequest = request;
+Response Server::handleRequest(Request request) const {
 	Response response;
 
 	const auto dispatch = [&]() -> Response {
 		for (const auto &middleware : middlewares_) {
-			if (middleware->process(processedRequest, response))
+			if (middleware->process(request, response))
 				return response;
 		}
 
-		const auto methodIt = routeHandlers_.find(processedRequest.method);
+		const auto methodIt = routeHandlers_.find(request.method);
 		if (methodIt != routeHandlers_.end()) {
-			const auto handlerIt = methodIt->second.find(processedRequest.path);
+			const auto handlerIt = methodIt->second.find(request.path);
 			if (handlerIt != methodIt->second.end())
-				return handlerIt->second(processedRequest);
+				return handlerIt->second(request);
 		}
 
-		const auto patternIt = patternHandlers_.find(processedRequest.method);
+		const auto patternIt = patternHandlers_.find(request.method);
 		if (patternIt != patternHandlers_.end()) {
 			for (const auto &[pattern, handler] : patternIt->second) {
-				if (std::regex_match(processedRequest.path, pattern))
-					return handler(processedRequest);
+				if (std::regex_match(request.path, pattern))
+					return handler(request);
 			}
 		}
 
-		return handleStaticFileRequest(processedRequest);
+		return handleStaticFileRequest(request);
 	};
 
 	response = dispatch();
 
 	for (const auto &middleware : middlewares_) {
-		middleware->postProcess(processedRequest, response);
+		middleware->postProcess(request, response);
 	}
+
+	if (request.method == Method::HEAD)
+		response.body.clear();
 
 	return response;
 }
 
 Response Server::handleStaticFileRequest(const Request &request) const {
-	LOG_INFO("Handling request for path: {}", request.path);
-
 	if (!request.path.starts_with('/'))
 		return Response::error(400);
 
@@ -442,8 +475,6 @@ Response Server::handleStaticFileRequest(const Request &request) const {
 		LOG_ERROR("Failed to read file: {}", target.string());
 		return Response::error(500);
 	}
-
-	LOG_INFO("Successfully read file: {}", target.string());
 
 	Response response;
 	response.headers.emplace("Content-Type", std::string(sMimeTypeFor(target)));

@@ -31,8 +31,9 @@ public:
 	Middleware &operator=(Middleware &&) = delete;
 	virtual ~Middleware() = default;
 
-	// Return true if the middleware handled the request, optionally modify request, and set response
-	virtual bool process(Request &request, Response &response) = 0;
+	// Return true if the middleware handled the request, optionally modify request, and set response.
+	// The default observes without handling, which is all a postProcess-only middleware needs.
+	virtual bool process(Request & /*request*/, Response & /*response*/) { return false; }
 
 	// Called after routing, with the final response
 	virtual void postProcess(const Request & /*request*/, const Response & /*response*/) {}
@@ -95,7 +96,8 @@ public:
 	void registerPatternHandler(std::initializer_list<Method> methods, const std::string &pattern, const Handler &handler);
 
 protected:
-	[[nodiscard]] Response handleRequest(const Request &request) const;
+	// Taken by value: middlewares mutate the request, and later stages read the mutated copy
+	[[nodiscard]] Response handleRequest(Request request) const;
 	[[nodiscard]] Response handleStaticFileRequest(const Request &request) const;
 
 private:

@@ -55,8 +55,14 @@ using Headers = std::map<std::string, std::string, CaseInsensitiveLess>;
 
 [[nodiscard]] bool equalsIgnoreCase(std::string_view lhs, std::string_view rhs) noexcept;
 
-// Decodes %XX escapes and '+' as space; invalid escapes are left verbatim
-[[nodiscard]] std::string percentDecode(std::string_view input);
+// Decodes %XX escapes; invalid escapes are left verbatim. '+' means space only in query/form data
+[[nodiscard]] std::string percentDecode(std::string_view input, bool plusAsSpace = true);
+
+// Escapes everything outside the unreserved set, leaving '/' intact so a path stays a path
+[[nodiscard]] std::string percentEncode(std::string_view input);
+
+// inet_ntoa returns a shared static buffer, so worker threads need this instead
+[[nodiscard]] std::string addressToString(const sockaddr_in &address);
 
 // Splits "a=1&b=2" and percent-decodes each name and value; later duplicates win
 [[nodiscard]] std::map<std::string, std::string> parseQuery(std::string_view query);
@@ -83,8 +89,8 @@ using Headers = std::map<std::string, std::string, CaseInsensitiveLess>;
 		return "Content Too Large";
 	case 500:
 		return "Internal Server Error";
-	case 505:
-		return "HTTP Version Not Supported";
+	case 501:
+		return "Not Implemented";
 	default:
 		return "Unknown";
 	}

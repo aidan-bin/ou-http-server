@@ -1,18 +1,18 @@
-#include "Logging.h"
+#include "AccessLog.h"
 
 #include <chrono>
+#include <ctime>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
-
-#include <arpa/inet.h>
+#include <utility>
 
 namespace ou::http {
 
 namespace {
 	std::string sGetTimestamp() {
-		auto now = std::chrono::system_clock::now();
-		std::time_t nowTime = std::chrono::system_clock::to_time_t(now);
+		const auto now = std::chrono::system_clock::now();
+		const std::time_t nowTime = std::chrono::system_clock::to_time_t(now);
 		std::tm tmStruct{};
 		localtime_r(&nowTime, &tmStruct);
 
@@ -22,10 +22,8 @@ namespace {
 	}
 
 	std::string sFormatLogEntry(const Request &request, const Response &response, const sockaddr_in &clientAddr) {
-		std::ostringstream oss;
-		oss << "[" << sGetTimestamp() << "] " << inet_ntoa(clientAddr.sin_addr) << " - \"" << request.method << " " << request.path << "\" "
-				<< response.statusCode << " " << response.body.size() << "\n";
-		return oss.str();
+		return std::format("[{}] {} - \"{} {}\" {} {}\n", sGetTimestamp(), addressToString(clientAddr), request.method, request.path,
+											 response.statusCode, response.body.size());
 	}
 } // namespace
 
@@ -40,11 +38,6 @@ void AccessLog::log(const Request &request, const Response &response, const sock
 		return;
 
 	logFile << sFormatLogEntry(request, response, clientAddr);
-}
-
-bool AccessLog::process(Request & /*request*/, Response & /*response*/) {
-	// Logged from postProcess, once the status is known
-	return false;
 }
 
 void AccessLog::postProcess(const Request &request, const Response &response) {

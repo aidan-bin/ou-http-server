@@ -5,7 +5,8 @@
 #include <limits>
 #include <ostream>
 #include <ranges>
-#include <sstream>
+
+#include <arpa/inet.h>
 
 namespace ou::http {
 
@@ -40,12 +41,12 @@ bool CaseInsensitiveLess::operator()(std::string_view lhs, std::string_view rhs)
 
 bool equalsIgnoreCase(std::string_view lhs, std::string_view rhs) noexcept { return std::ranges::equal(lhs, rhs, {}, sToLower, sToLower); }
 
-std::string percentDecode(std::string_view input) {
+std::string percentDecode(std::string_view input, bool plusAsSpace) {
 	std::string decoded;
 	decoded.reserve(input.size());
 
 	for (size_t i = 0; i < input.size(); ++i) {
-		if (input[i] == '+') {
+		if (plusAsSpace && input[i] == '+') {
 			decoded += ' ';
 			continue;
 		}
@@ -64,6 +65,32 @@ std::string percentDecode(std::string_view input) {
 	}
 
 	return decoded;
+}
+
+std::string percentEncode(std::string_view input) {
+	constexpr std::string_view kUnreserved = "-_.~/";
+
+	std::string encoded;
+	encoded.reserve(input.size());
+
+	for (const unsigned char ch : input) {
+		const bool unreserved = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9')
+														|| kUnreserved.find(static_cast<char>(ch)) != std::string_view::npos;
+		if (unreserved) {
+			encoded += static_cast<char>(ch);
+			continue;
+		}
+		encoded += std::format("%{:02X}", static_cast<unsigned>(ch));
+	}
+
+	return encoded;
+}
+
+std::string addressToString(const sockaddr_in &address) {
+	std::array<char, INET_ADDRSTRLEN> buffer{};
+	if (inet_ntop(AF_INET, &address.sin_addr, buffer.data(), buffer.size()) == nullptr)
+		return "unknown";
+	return { buffer.data() };
 }
 
 std::map<std::string, std::string> parseQuery(std::string_view query) {
@@ -120,14 +147,15 @@ std::optional<Request> Request::parse(std::string_view raw) {
 		return std::nullopt;
 
 	target = trim(target);
-	if (target.empty() || !trim(version).starts_with("HTTP/"))
+	const std::string_view httpVersion = trim(version);
+	if (target.empty() || (httpVersion != "HTTP/1.0" && httpVersion != "HTTP/1.1"))
 		return std::nullopt;
 
 	Request request;
 	request.method = *method;
 
 	const size_t queryStart = target.find('?');
-	request.path = percentDecode(target.substr(0, queryStart));
+	request.path = percentDecode(target.substr(0, queryStart), false);
 	if (queryStart != std::string_view::npos)
 		request.query = std::string(target.substr(queryStart + 1));
 
@@ -142,12 +170,15 @@ std::optional<Request> Request::parse(std::string_view raw) {
 		if (line.empty())
 			continue;
 
-		auto [name, value] = split_at(line, ':');
-		name = trim(name);
-		if (name.empty())
+		const size_t colon = line.find(':');
+		if (colon == 0 || colon == std::string_view::npos)
 			return std::nullopt;
 
-		request.headers[std::string(name)] = std::string(trim(value));
+		const std::string_view name = line.substr(0, colon);
+		if (name.back() == ' ' || name.back() == '\t')
+			return std::nullopt;
+
+		request.headers[std::string(name)] = std::string(trim(line.substr(colon + 1)));
 	}
 
 	request.body = std::string(bodySection);
@@ -188,21 +219,20 @@ std::optional<size_t> Request::contentLength() const {
 std::string Response::serialize() const {
 	const std::string_view reason = reasonPhrase.empty() ? defaultReasonPhrase(statusCode) : std::string_view(reasonPhrase);
 
-	std::ostringstream oss;
-	oss << "HTTP/1.1 " << statusCode << " " << reason << "\r\n";
-	oss << "Content-Length: " << body.size() << "\r\n";
+	std::string serialized = std::format("HTTP/1.1 {} {}\r\nContent-Length: {}\r\n", statusCode, reason, body.size());
 
 	if (!headers.contains("Content-Type"))
-		oss << "Content-Type: text/html\r\n";
+		serialized += "Content-Type: text/html\r\n";
 
 	for (const auto &[name, value] : headers) {
 		if (equalsIgnoreCase(name, "Content-Length"))
 			continue;
-		oss << name << ": " << value << "\r\n";
+		serialized += std::format("{}: {}\r\n", name, value);
 	}
 
-	oss << "\r\n" << body;
-	return oss.str();
+	serialized += "\r\n";
+	serialized += body;
+	return serialized;
 }
 
 Response Response::plainText(int statusCode, std::string body) {

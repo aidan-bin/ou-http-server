@@ -1,3 +1,4 @@
+#include "AccessLog.h"
 #include "KVStore.h"
 #include "Logging.h"
 #include "Server.h"
@@ -39,16 +40,13 @@ int runServer() {
 
 	server.registerPathHandler({ Method::GET, Method::PUT, Method::DELETE }, "/kv", std::make_shared<KVStore>());
 
-	std::thread serverThread([&server]() { server.start(); });
+	server.start();
 
 	while (g_running.load()) {
 		std::this_thread::sleep_for(std::chrono::milliseconds(100));
 	}
 
 	server.stop();
-	if (serverThread.joinable()) {
-		serverThread.join();
-	}
 
 	LOG_INFO("Exiting");
 	return EXIT_SUCCESS;

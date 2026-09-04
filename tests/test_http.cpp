@@ -1,6 +1,7 @@
 #define BOOST_TEST_MODULE ToyHttpServerTest
 #include <boost/test/included/unit_test.hpp>
 
+#include "AccessLog.h"
 #include "HttpTypes.h"
 #include "KVStore.h"
 #include "Logging.h"
@@ -59,6 +60,9 @@ BOOST_AUTO_TEST_CASE(test_request_parsing_rejects_malformed_input) {
 	BOOST_CHECK(!Request::parse("GET index.html HTTP/1.1\r\n\r\n").has_value());
 	BOOST_CHECK(!Request::parse("").has_value());
 	BOOST_CHECK(!Request::parse("\r\n\r\n").has_value());
+	BOOST_CHECK(!Request::parse("GET / HTTP/1.1\r\nNoColonHere\r\n\r\n").has_value());
+	BOOST_CHECK(!Request::parse("GET / HTTP/1.1\r\n: novalue\r\n\r\n").has_value());
+	BOOST_CHECK(!Request::parse("GET / HTTP/1.1\r\nContent-Length : 4\r\n\r\nabcd").has_value());
 }
 
 BOOST_AUTO_TEST_CASE(test_request_headers_are_case_insensitive) {
@@ -101,10 +105,35 @@ BOOST_AUTO_TEST_CASE(test_percent_decoding) {
 	BOOST_CHECK_EQUAL(percentDecode("%2Fetc%2fpasswd"), "/etc/passwd");
 	BOOST_CHECK_EQUAL(percentDecode("100%"), "100%");
 	BOOST_CHECK_EQUAL(percentDecode("%zz"), "%zz");
+	BOOST_CHECK_EQUAL(percentDecode("a+b", false), "a+b");
 
 	const std::optional<Request> parsed = Request::parse("GET /my%20file.txt HTTP/1.1\r\n\r\n");
 	BOOST_REQUIRE(parsed.has_value());
 	BOOST_CHECK_EQUAL(parsed.value().path, "/my file.txt");
+
+	const std::optional<Request> plus = Request::parse("GET /a+b.txt?q=a+b HTTP/1.1\r\n\r\n");
+	BOOST_REQUIRE(plus.has_value());
+	BOOST_CHECK_EQUAL(plus.value().path, "/a+b.txt");
+	BOOST_CHECK_EQUAL(parseQuery(plus.value().query).at("q"), "a b");
+}
+
+BOOST_AUTO_TEST_CASE(test_percent_encoding) {
+	BOOST_CHECK_EQUAL(percentEncode("a b"), "a%20b");
+	BOOST_CHECK_EQUAL(percentEncode("/dir/a b.txt"), "/dir/a%20b.txt");
+	// '+' must not survive: percentDecode reads it back as a space
+	BOOST_CHECK_EQUAL(percentEncode("a+b"), "a%2Bb");
+	BOOST_CHECK_EQUAL(percentEncode("a#b?c"), "a%23b%3Fc");
+	BOOST_CHECK_EQUAL(percentEncode("aZ0-_.~/"), "aZ0-_.~/");
+
+	BOOST_CHECK_EQUAL(percentDecode(percentEncode("/a b+c#d.txt")), "/a b+c#d.txt");
+}
+
+BOOST_AUTO_TEST_CASE(test_request_parsing_rejects_unsupported_versions) {
+	BOOST_CHECK(Request::parse("GET / HTTP/1.0\r\n\r\n").has_value());
+	BOOST_CHECK(Request::parse("GET / HTTP/1.1\r\n\r\n").has_value());
+	BOOST_CHECK(!Request::parse("GET / HTTP/2.0\r\n\r\n").has_value());
+	BOOST_CHECK(!Request::parse("GET / HTTP/9.9\r\n\r\n").has_value());
+	BOOST_CHECK(!Request::parse("GET / HTTP/\r\n\r\n").has_value());
 }
 
 BOOST_AUTO_TEST_CASE(test_response_serialization) {
@@ -321,6 +350,7 @@ BOOST_AUTO_TEST_CASE(test_directory_traversal_is_rejected) {
 BOOST_AUTO_TEST_CASE(test_directory_indexing_escapes_names) {
 	const std::filesystem::path root = sMakeTempDir("indexing");
 	sWriteFile(root / "a<script>.txt", "x");
+	sWriteFile(root / "a b.txt", "x");
 
 	TestServer::Config indexingOff;
 	indexingOff.servingDirectory = root;
@@ -336,6 +366,9 @@ BOOST_AUTO_TEST_CASE(test_directory_indexing_escapes_names) {
 	BOOST_CHECK_EQUAL(index.statusCode, 200);
 	BOOST_CHECK(index.body.find("&lt;script&gt;") != std::string::npos);
 	BOOST_CHECK(index.body.find("<script>") == std::string::npos);
+
+	BOOST_CHECK(index.body.find("href=\"/a%20b.txt\"") != std::string::npos);
+	BOOST_CHECK(index.body.find(">a b.txt<") != std::string::npos);
 
 	std::filesystem::remove_all(root);
 }
@@ -399,6 +432,78 @@ BOOST_AUTO_TEST_CASE(test_unique_fd_closes_once) {
 	// NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg) fcntl() is variadic
 	BOOST_CHECK_EQUAL(::fcntl(raw, F_GETFD), -1);
 	BOOST_CHECK_EQUAL(errno, EBADF);
+}
+
+// --- Live socket tests ---
+
+namespace {
+
+std::string sRoundTrip(uint16_t port, std::string_view rawRequest) {
+	const ou::UniqueFd fd(::socket(AF_INET, SOCK_STREAM, 0));
+	if (!fd)
+		return {};
+
+	// So a regression hangs this case rather than the whole ctest timeout
+	const timeval timeout{ .tv_sec = 5, .tv_usec = 0 };
+	(void)::setsockopt(fd.get(), SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+
+	sockaddr_in addr{};
+	addr.sin_family = AF_INET;
+	addr.sin_port = htons(port);
+	addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+	if (::connect(fd.get(), reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) < 0)
+		return {};
+
+	if (::send(fd.get(), rawRequest.data(), rawRequest.size(), 0) < 0)
+		return {};
+
+	std::string response;
+	std::array<char, 4096> chunk{};
+	while (true) {
+		const ssize_t bytesRead = ::recv(fd.get(), chunk.data(), chunk.size(), 0);
+		if (bytesRead <= 0)
+			break;
+		response.append(chunk.data(), static_cast<size_t>(bytesRead));
+	}
+	return response;
+}
+
+} // namespace
+
+BOOST_AUTO_TEST_CASE(test_server_round_trip_over_a_real_socket) {
+	const std::filesystem::path root = sMakeTempDir("socket");
+	sWriteFile(root / "hello.txt", "hello socket");
+
+	Server::Config config;
+	config.servingDirectory = root;
+	config.port = 18173;
+	config.threadCount = 2;
+
+	Server server(config);
+	BOOST_REQUIRE(server.init());
+	server.start();
+
+	const std::string ok = sRoundTrip(config.port, "GET /hello.txt HTTP/1.1\r\nHost: localhost\r\n\r\n");
+	BOOST_CHECK(ok.starts_with("HTTP/1.1 200 OK"));
+	BOOST_CHECK(ok.ends_with("hello socket"));
+
+	const std::string head = sRoundTrip(config.port, "HEAD /hello.txt HTTP/1.1\r\nHost: localhost\r\n\r\n");
+	BOOST_CHECK(head.starts_with("HTTP/1.1 200 OK"));
+	BOOST_CHECK(head.ends_with("\r\n\r\n"));
+	BOOST_CHECK(head.find("Content-Length: 0\r\n") != std::string::npos);
+
+	const std::string chunked
+			= sRoundTrip(config.port, "POST /hello.txt HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n");
+	BOOST_CHECK(chunked.starts_with("HTTP/1.1 501"));
+
+	const std::string badVersion = sRoundTrip(config.port, "GET /hello.txt HTTP/2.0\r\nHost: localhost\r\n\r\n");
+	BOOST_CHECK(badVersion.starts_with("HTTP/1.1 400"));
+
+	// Must return rather than deadlock, and must tolerate the second call ~Server makes
+	server.stop();
+	server.stop();
+
+	std::filesystem::remove_all(root);
 }
 
 // --- Access log tests ---
@@ -496,7 +601,7 @@ BOOST_AUTO_TEST_CASE(test_access_log_records_routed_status) {
 	TestServer server(config);
 
 	server.addMiddleware(std::make_shared<AccessLog>(AccessLog::Config{ .path = logPath }));
-	server.registerPathHandler(Method::GET, "/hello", [](const Request &) { return Response::plainText(200, "hi there"); });
+	server.registerPathHandler({ Method::GET, Method::HEAD }, "/hello", [](const Request &) { return Response::plainText(200, "hi there"); });
 
 	Request routed = sMakeLoggedRequest("/hello");
 	const Response routedResponse = server.handleRequest(routed);
@@ -521,7 +626,22 @@ BOOST_AUTO_TEST_CASE(test_access_log_records_routed_status) {
 	BOOST_CHECK(secondLine.find(" 404 ") != std::string::npos);
 	BOOST_CHECK(secondLine.find(" 200 0") == std::string::npos);
 
-	BOOST_CHECK_EQUAL(sCountLines(logPath), 2U);
+	// HEAD drops the body, but the log records what the equivalent GET would have sent
+	Request head = sMakeLoggedRequest("/hello");
+	head.method = Method::HEAD;
+	const Response headResponse = server.handleRequest(head);
+	BOOST_CHECK(headResponse.body.empty());
+
+	std::string thirdLine;
+	std::ifstream reread(logPath);
+	std::getline(reread, thirdLine);
+	std::getline(reread, thirdLine);
+	std::getline(reread, thirdLine);
+	reread.close();
+	BOOST_CHECK(thirdLine.find("HEAD /hello") != std::string::npos);
+	BOOST_CHECK(thirdLine.find(" 200 8") != std::string::npos);
+
+	BOOST_CHECK_EQUAL(sCountLines(logPath), 3U);
 
 	std::filesystem::remove(logPath);
 }
