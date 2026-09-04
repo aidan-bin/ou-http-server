@@ -18,3 +18,6 @@ target_include_directories(test_http PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(test_http PRIVATE http_lib ${SSL_LIBS} Boost::unit_test_framework pthread)
 
 add_test(NAME test_http COMMAND test_http)
+
+# Fallback for deadlocks/hangs
+set_tests_properties(test_http PROPERTIES TIMEOUT 60)

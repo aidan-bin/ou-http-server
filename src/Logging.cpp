@@ -29,54 +29,28 @@ namespace {
 	}
 } // namespace
 
-AccessLog::AccessLog(Config config) : config_(std::move(config)) { std::ofstream logFile(config_.path, std::ios::app); }
+AccessLog::AccessLog(Config config) : config_(std::move(config)) {}
 
 void AccessLog::log(const Request &request, const Response &response, const sockaddr_in &clientAddr) {
+	const std::lock_guard<std::mutex> lock(mutex_);
+
+	// Opened per entry so an externally rotated log is recreated
 	std::ofstream logFile(config_.path, std::ios::app);
 	if (!logFile)
 		return;
 
-	std::string entry = sFormatLogEntry(request, response, clientAddr);
-	logFile << entry;
-	logFile.close();
-
-	enforceSizeLimit();
+	logFile << sFormatLogEntry(request, response, clientAddr);
 }
 
-void AccessLog::enforceSizeLimit() const {
-	if (std::filesystem::file_size(config_.path) <= config_.maxSizeBytes) {
-		return;
-	}
-
-	std::ifstream file(config_.path);
-	std::deque<std::string> lines;
-	std::string line;
-
-	while (std::getline(file, line)) {
-		lines.push_back(line);
-	}
-	file.close();
-
-	// Remove the oldest 20% of lines to limit truncation frequency
-	size_t linesToRemove = lines.size() / 5;
-	for (size_t i = 0; i < linesToRemove && !lines.empty(); ++i) {
-		lines.pop_front();
-	}
-
-	// Write back to a temporary file and rename
-	std::ofstream tempFile(config_.path.string() + ".tmp");
-	for (const auto &l : lines) {
-		tempFile << l << "\n";
-	}
-	tempFile.close();
-	std::filesystem::rename(config_.path.string() + ".tmp", config_.path);
+bool AccessLog::process(Request & /*request*/, Response & /*response*/) {
+	// Logged from postProcess, once the status is known
+	return false;
 }
 
-bool AccessLog::process(Request &request, Response &response) {
+void AccessLog::postProcess(const Request &request, const Response &response) {
 	if (request.clientAddr.has_value()) {
 		log(request, response, request.clientAddr.value());
 	}
-	return false;
 }
 
 } // namespace ou::http

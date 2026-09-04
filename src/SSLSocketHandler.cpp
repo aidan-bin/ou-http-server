@@ -1,57 +1,107 @@
 #include "SSLSocketHandler.h"
 
+#ifndef DISABLE_HTTPS
+
+#include <algorithm>
 #include <limits>
 #include <stdexcept>
 #include <unistd.h>
 
-SSLSocketHandler::SSLSocketHandler(const Config &config) : sslCtx_(SSL_CTX_new(TLS_server_method())) {
-	SSL_library_init();
-	OpenSSL_add_all_algorithms();
-	SSL_load_error_strings();
+namespace ou {
 
+namespace {
+
+	// Large transfers are chunked since SSL_write() only takes an int
+	constexpr size_t kMaxTransfer = static_cast<size_t>(std::numeric_limits<int>::max());
+
+} // namespace
+
+SSLSocketHandler::SSLSocketHandler(const Config &config) : sslCtx_(SSL_CTX_new(TLS_server_method())) {
 	if ((sslCtx_ == nullptr) || SSL_CTX_use_certificate_file(sslCtx_, config.certPath.c_str(), SSL_FILETYPE_PEM) <= 0
 			|| SSL_CTX_use_PrivateKey_file(sslCtx_, config.keyPath.c_str(), SSL_FILETYPE_PEM) <= 0) {
+		SSL_CTX_free(sslCtx_);
 		throw std::runtime_error("Failed to initialize SSL.");
 	}
 }
 
-SSLSocketHandler::~SSLSocketHandler() { SSL_CTX_free(sslCtx_); }
+SSLSocketHandler::~SSLSocketHandler() {
+	for (const auto &[clientSocket, ssl] : sslSessions_) {
+		SSL_free(ssl);
+	}
+	SSL_CTX_free(sslCtx_);
+}
+
+SSL *SSLSocketHandler::session(int clientSocket) const {
+	const std::lock_guard<std::mutex> lock(sessionsMutex_);
+	const auto it = sslSessions_.find(clientSocket);
+	return it != sslSessions_.end() ? it->second : nullptr;
+}
 
 bool SSLSocketHandler::acceptConnection(int clientSocket) {
 	SSL *ssl = SSL_new(sslCtx_);
+	if (ssl == nullptr)
+		return false;
+
 	SSL_set_fd(ssl, clientSocket);
 	if (SSL_accept(ssl) <= 0) {
 		SSL_free(ssl);
 		return false;
 	}
+
+	const std::lock_guard<std::mutex> lock(sessionsMutex_);
 	sslSessions_[clientSocket] = ssl;
 	return true;
 }
 
-ssize_t SSLSocketHandler::read(int clientSocket, char *buffer, size_t size) {
-	auto it = sslSessions_.find(clientSocket);
-	if (it == sslSessions_.end())
+ssize_t SSLSocketHandler::read(int clientSocket, std::span<char> buffer) {
+	// The lock covers the map lookup only: one thread owns a connection, so TLS I/O runs outside it
+	SSL *ssl = session(clientSocket);
+	if (ssl == nullptr)
 		return -1;
-	if (size > std::numeric_limits<int>::max())
-		throw std::overflow_error("Buffer size exceeds maximum int value for SSL_read");
-	return SSL_read(it->second, buffer, static_cast<int>(size));
+
+	const auto size = static_cast<int>(std::min(buffer.size(), kMaxTransfer));
+	return SSL_read(ssl, buffer.data(), size);
 }
 
-ssize_t SSLSocketHandler::write(int clientSocket, const std::string &data) {
-	auto it = sslSessions_.find(clientSocket);
-	if (it == sslSessions_.end())
+ssize_t SSLSocketHandler::write(int clientSocket, std::string_view data) {
+	SSL *ssl = session(clientSocket);
+	if (ssl == nullptr)
 		return -1;
-	if (data.size() > static_cast<size_t>(std::numeric_limits<int>::max()))
-		throw std::overflow_error("Data size exceeds maximum int value for SSL_write");
-	return SSL_write(it->second, data.c_str(), static_cast<int>(data.size()));
+
+	size_t written = 0;
+	while (written < data.size()) {
+		const std::string_view remaining = data.substr(written);
+		const auto size = static_cast<int>(std::min(remaining.size(), kMaxTransfer));
+
+		const int sent = SSL_write(ssl, remaining.data(), size);
+		if (sent <= 0)
+			return -1;
+
+		written += static_cast<size_t>(sent);
+	}
+
+	return static_cast<ssize_t>(written);
 }
 
 void SSLSocketHandler::closeConnection(int clientSocket) {
-	auto it = sslSessions_.find(clientSocket);
-	if (it != sslSessions_.end()) {
-		SSL_shutdown(it->second);
-		SSL_free(it->second);
-		sslSessions_.erase(it);
+	SSL *ssl = nullptr;
+	{
+		const std::lock_guard<std::mutex> lock(sessionsMutex_);
+		const auto it = sslSessions_.find(clientSocket);
+		if (it != sslSessions_.end()) {
+			ssl = it->second;
+			sslSessions_.erase(it);
+		}
 	}
+
+	if (ssl != nullptr) {
+		SSL_shutdown(ssl);
+		SSL_free(ssl);
+	}
+
 	::close(clientSocket);
 }
+
+} // namespace ou
+
+#endif // DISABLE_HTTPS

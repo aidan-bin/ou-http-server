@@ -9,6 +9,8 @@ list(REMOVE_ITEM HTTP_LIB_SOURCES ${CMAKE_SOURCE_DIR}/src/main.cpp)
 
 option(DISABLE_HTTPS "Disable HTTPS support" OFF)
 
+add_compile_options(-Wall -Wextra -Werror)
+
 find_package(OpenSSL)
 
 if (NOT DISABLE_HTTPS AND OpenSSL_FOUND)
@@ -42,8 +44,6 @@ if (CLANG_TIDY_EXECUTABLE)
 else()
 	message(WARNING "Clang-tidy not found, skipping static analysis.")
 endif()
-
-add_compile_options(-Wall -Wextra -Werror)
 
 # Tests
 enable_testing()

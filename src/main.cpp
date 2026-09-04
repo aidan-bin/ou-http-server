@@ -5,18 +5,19 @@
 #include <atomic>
 #include <chrono>
 #include <csignal>
+#include <exception>
+#include <memory>
 #include <thread>
 
+namespace {
+
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 std::atomic<bool> g_running{ true };
 
-void signalHandler(int signum) {
-	LOG_INFO("Interrupt signal ({}) received", signum);
-	g_running.store(false);
-}
+void sSignalHandler(int /*signum*/) { g_running.store(false); }
 
-int main(int argc, char *argv[]) {
+int runServer() {
 	using namespace ou::http;
-	std::signal(SIGINT, signalHandler);
 
 	Server::Config config;
 	config.servingDirectory = "./example/www";
@@ -33,11 +34,10 @@ int main(int argc, char *argv[]) {
 		return EXIT_FAILURE;
 	}
 
-	AccessLog::Config accessLogConfig = { .path = "access.log", .maxSizeBytes = 10 * 1024 * 1024 };
+	const AccessLog::Config accessLogConfig = { .path = "access.log" };
 	server.addMiddleware(std::make_shared<AccessLog>(accessLogConfig));
 
-	server.registerPatternHandler(std::set<Method>{ Method::GET, Method::PUT, Method::DELETE }, R"(^/kv(\?.*)?$)",
-																std::make_shared<KVStore>());
+	server.registerPathHandler({ Method::GET, Method::PUT, Method::DELETE }, "/kv", std::make_shared<KVStore>());
 
 	std::thread serverThread([&server]() { server.start(); });
 
@@ -52,4 +52,22 @@ int main(int argc, char *argv[]) {
 
 	LOG_INFO("Exiting");
 	return EXIT_SUCCESS;
+}
+
+} // namespace
+
+int main() {
+	(void)std::signal(SIGINT, sSignalHandler);
+	// A peer that disconnects mid-write would otherwise kill the process
+	(void)std::signal(SIGPIPE, SIG_IGN);
+
+	try {
+		return runServer();
+	} catch (const std::exception &e) {
+		LOG_ERROR("Fatal error: {}", e.what());
+		return EXIT_FAILURE;
+	} catch (...) {
+		LOG_ERROR("Fatal error of unknown type");
+		return EXIT_FAILURE;
+	}
 }

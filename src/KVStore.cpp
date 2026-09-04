@@ -1,71 +1,65 @@
 #include "KVStore.h"
 
-#include <sstream>
+#include <utility>
 
 namespace ou::http {
 
-void KVStore::set(const std::string &key, const std::string &value) {
-	std::lock_guard<std::mutex> lock(mutex_);
-	store_[key] = value;
+void KVStore::set(std::string key, std::string value) {
+	const std::lock_guard<std::mutex> lock(mutex_);
+	store_.insert_or_assign(std::move(key), std::move(value));
 }
 
-std::optional<std::string> KVStore::get(const std::string &key) const {
-	std::lock_guard<std::mutex> lock(mutex_);
-	auto it = store_.find(key);
+std::optional<std::string> KVStore::get(std::string_view key) const {
+	const std::lock_guard<std::mutex> lock(mutex_);
+	const auto it = store_.find(key);
 	if (it != store_.end()) {
 		return it->second;
 	}
 	return std::nullopt;
 }
 
-bool KVStore::remove(const std::string &key) {
-	std::lock_guard<std::mutex> lock(mutex_);
-	return store_.erase(key) > 0;
+bool KVStore::remove(std::string_view key) {
+	const std::lock_guard<std::mutex> lock(mutex_);
+	const auto it = store_.find(key);
+	if (it == store_.end()) {
+		return false;
+	}
+	store_.erase(it);
+	return true;
 }
 
-static std::optional<std::string> get_query_key(const std::string &path) {
-	auto pos = path.find('?');
-	if (pos == std::string::npos)
-		return std::nullopt;
-	std::string query = path.substr(pos + 1);
-	std::istringstream iss(query);
-	std::string pair;
-	while (std::getline(iss, pair, '&')) {
-		auto eq = pair.find('=');
-		if (eq != std::string::npos && pair.substr(0, eq) == "key") {
-			return pair.substr(eq + 1);
-		}
-	}
-	return std::nullopt;
+size_t KVStore::size() const {
+	const std::lock_guard<std::mutex> lock(mutex_);
+	return store_.size();
 }
 
 Response KVStore::handle(const Request &request) {
-	auto keyOpt = get_query_key(request.path);
-	if (!keyOpt) {
-		return { 400, "Bad Request", { { "Content-Type", "text/plain" } }, "Missing key parameter" };
+	const std::map<std::string, std::string> params = parseQuery(request.query);
+
+	const auto keyIt = params.find("key");
+	if (keyIt == params.end() || keyIt->second.empty()) {
+		return Response::plainText(400, "Missing key parameter");
 	}
-	const std::string &key = *keyOpt;
+	const std::string &key = keyIt->second;
 
 	switch (request.method) {
 	case Method::GET: {
-		auto val = get(key);
-		if (val) {
-			return { 200, "OK", { { "Content-Type", "text/plain" } }, *val };
+		const std::optional<std::string> value = get(key);
+		if (value) {
+			return Response::plainText(200, *value);
 		}
-		return { 404, "Not Found", { { "Content-Type", "text/plain" } }, "Key not found" };
+		return Response::plainText(404, "Key not found");
 	}
-	case Method::PUT: {
+	case Method::PUT:
 		set(key, request.body);
-		return { 200, "OK", { { "Content-Type", "text/plain" } }, "OK" };
-	}
-	case Method::DELETE: {
+		return Response::plainText(200, "OK");
+	case Method::DELETE:
 		if (remove(key)) {
-			return { 200, "OK", { { "Content-Type", "text/plain" } }, "Deleted" };
+			return Response::plainText(200, "Deleted");
 		}
-		return { 404, "Not Found", { { "Content-Type", "text/plain" } }, "Key not found" };
-	}
+		return Response::plainText(404, "Key not found");
 	default:
-		return { 405, "Method Not Allowed", { { "Content-Type", "text/plain" } }, "Method Not Allowed" };
+		return Response::plainText(405, "Method Not Allowed");
 	}
 }
 
