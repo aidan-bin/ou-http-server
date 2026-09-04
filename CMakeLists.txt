@@ -4,6 +4,8 @@ project(toy_http_server)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 file(GLOB HTTP_LIB_SOURCES ${CMAKE_SOURCE_DIR}/src/*.cpp ${CMAKE_SOURCE_DIR}/src/*.h)
 list(REMOVE_ITEM HTTP_LIB_SOURCES ${CMAKE_SOURCE_DIR}/src/main.cpp)
 
@@ -26,25 +28,33 @@ else()
 	)
 endif()
 
-# Shared library
 add_library(http_lib ${HTTP_LIB_SOURCES})
 target_link_libraries(http_lib PRIVATE pthread ${SSL_LIBS})
 target_include_directories(http_lib PUBLIC ${CMAKE_SOURCE_DIR}/src)
 
-# Example driver program
 add_executable(toy_http_server src/main.cpp)
 target_link_libraries(toy_http_server PRIVATE http_lib ${SSL_LIBS})
 
 find_program(CLANG_TIDY_EXECUTABLE NAMES clang-tidy)
 
 if (CLANG_TIDY_EXECUTABLE)
-	message(STATUS "Clang-tidy found, enabling static analysis.")
-	set(CMAKE_CXX_CLANG_TIDY_VERBOSE "ON")
-	set_target_properties(http_lib PROPERTIES CXX_CLANG_TIDY "clang-tidy;-checks=-*,modernize-*,readability-*,cppcoreguidelines-*,performance-*,bugprone-*,-modernize-use-designated-initializers,-*-magic-numbers,-llvmlibc-callee-namespace,-modernize-use-trailing-return-type,-readability-identifier-length,-readability-braces-around-statements,-cppcoreguidelines-pro-type-reinterpret-cast,-bugprone-easily-swappable-parameters;-use-color;-warnings-as-errors=*")
+	set(TIDY_SOURCES ${HTTP_LIB_SOURCES} ${CMAKE_SOURCE_DIR}/src/main.cpp ${CMAKE_SOURCE_DIR}/tests/test_http.cpp)
+	list(FILTER TIDY_SOURCES INCLUDE REGEX "\\.cpp$")
+	
+	if (APPLE)
+		execute_process(COMMAND xcrun --show-sdk-path
+			OUTPUT_VARIABLE MACOSX_SDK_PATH OUTPUT_STRIP_TRAILING_WHITESPACE)
+		set(TIDY_EXTRA_ARGS "--extra-arg-before=-isysroot${MACOSX_SDK_PATH}")
+	endif()
+
+	# Check list, -warnings-as-errors and color live in .clang-tidy, so editors get them too.
+	add_custom_target(tidy
+		COMMAND ${CLANG_TIDY_EXECUTABLE} -p ${CMAKE_BINARY_DIR} --quiet ${TIDY_EXTRA_ARGS} ${TIDY_SOURCES}
+		COMMENT "Running clang-tidy over src/ and tests/"
+		VERBATIM)
 else()
-	message(WARNING "Clang-tidy not found, skipping static analysis.")
+	message(WARNING "Clang-tidy not found; `tidy` target unavailable.")
 endif()
 
-# Tests
 enable_testing()
 add_subdirectory(tests)

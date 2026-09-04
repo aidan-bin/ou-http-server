@@ -38,6 +38,12 @@ def run_tests():
 		sys.exit(1)
 	run_command(["ctest", "--verbose"], cwd=BUILD_DIR)
 
+def run_tidy():
+	if not os.path.isdir(BUILD_DIR):
+		print("Build directory not found. Please build first.")
+		sys.exit(1)
+	run_command(["cmake", "--build", ".", "--target", "tidy"], cwd=BUILD_DIR)
+
 def docker_build():
 	run_command(["docker", "build", "-t", DOCKER_IMAGE, "."])
 
@@ -55,6 +61,7 @@ def main():
 
 	subparsers.add_parser("run", help="Run the main program locally")
 	subparsers.add_parser("test", help="Run the unit tests locally")
+	subparsers.add_parser("tidy", help="Run clang-tidy over src/ and tests/ (requires a prior build)")
 	subparsers.add_parser("docker-build", help="Build the Docker image")
 	subparsers.add_parser("docker-run", help="Run the Docker container")
 
@@ -66,6 +73,8 @@ def main():
 		run_main()
 	elif args.command == "test":
 		run_tests()
+	elif args.command == "tidy":
+		run_tidy()
 	elif args.command == "docker-build":
 		docker_build()
 	elif args.command == "docker-run":

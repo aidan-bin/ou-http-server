@@ -1,0 +1,3 @@
+Checks: '-*,modernize-*,readability-*,cppcoreguidelines-*,performance-*,bugprone-*,-modernize-use-designated-initializers,-*-magic-numbers,-llvmlibc-callee-namespace,-modernize-use-trailing-return-type,-readability-identifier-length,-readability-braces-around-statements,-cppcoreguidelines-pro-type-reinterpret-cast,-bugprone-easily-swappable-parameters'
+WarningsAsErrors: '*'
+UseColor: true
