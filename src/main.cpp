@@ -38,7 +38,9 @@ int runServer() {
 	const AccessLog::Config accessLogConfig = { .path = "access.log" };
 	server.addMiddleware(std::make_shared<AccessLog>(accessLogConfig));
 
-	server.registerPathHandler({ Method::GET, Method::PUT, Method::DELETE }, "/kv", std::make_shared<KVStore>());
+	const auto kvStore = std::make_shared<KVStore>();
+	server.registerPathHandler({ Method::GET, Method::PUT, Method::DELETE }, "/kv",
+														 [kvStore](const Request &request) { return kvStore->handle(request); });
 
 	server.start();
 

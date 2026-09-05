@@ -11,11 +11,11 @@
 #include <filesystem>
 #include <functional>
 #include <initializer_list>
+#include <map>
 #include <memory>
 #include <regex>
 #include <string>
 #include <thread>
-#include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -37,18 +37,6 @@ public:
 
 	// Called after routing, with the final response
 	virtual void postProcess(const Request & /*request*/, const Response & /*response*/) {}
-};
-
-class RequestHandler {
-public:
-	RequestHandler() = default;
-	RequestHandler(const RequestHandler &) = delete;
-	RequestHandler &operator=(const RequestHandler &) = delete;
-	RequestHandler(RequestHandler &&) = delete;
-	RequestHandler &operator=(RequestHandler &&) = delete;
-	virtual ~RequestHandler() = default;
-
-	virtual Response handle(const Request &request) = 0;
 };
 
 class Server {
@@ -84,15 +72,9 @@ public:
 
 	void addMiddleware(std::shared_ptr<Middleware> middleware);
 
-	void registerPathHandler(Method method, const std::string &path, std::shared_ptr<RequestHandler> handler);
 	void registerPathHandler(Method method, const std::string &path, Handler handler);
-	void registerPatternHandler(Method method, const std::string &pattern, std::shared_ptr<RequestHandler> handler);
 	void registerPatternHandler(Method method, const std::string &pattern, Handler handler);
-
-	void registerPathHandler(std::initializer_list<Method> methods, const std::string &path, const std::shared_ptr<RequestHandler> &handler);
 	void registerPathHandler(std::initializer_list<Method> methods, const std::string &path, const Handler &handler);
-	void registerPatternHandler(std::initializer_list<Method> methods, const std::string &pattern,
-															const std::shared_ptr<RequestHandler> &handler);
 	void registerPatternHandler(std::initializer_list<Method> methods, const std::string &pattern, const Handler &handler);
 
 protected:
@@ -101,6 +83,12 @@ protected:
 	[[nodiscard]] Response handleStaticFileRequest(const Request &request) const;
 
 private:
+	struct PatternRoute {
+		Method method;
+		std::regex pattern;
+		Handler handler;
+	};
+
 	void workerThread(int serverSocket);
 
 	// Never throws, and never closes the socket
@@ -114,8 +102,9 @@ private:
 	std::vector<std::thread> threads_;
 	std::vector<UniqueFd> sockets_; // One per worker thread
 
-	std::unordered_map<Method, std::unordered_map<std::string, Handler>> routeHandlers_;
-	std::unordered_map<Method, std::vector<std::pair<std::regex, Handler>>> patternHandlers_;
+	// Exact paths are looked up; patterns are tried in registration order
+	std::map<std::pair<Method, std::string>, Handler> pathHandlers_;
+	std::vector<PatternRoute> patternHandlers_;
 	std::vector<std::shared_ptr<Middleware>> middlewares_;
 
 	std::unique_ptr<SocketHandler> socketHandler_;

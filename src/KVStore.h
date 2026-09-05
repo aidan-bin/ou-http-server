@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Server.h"
+#include "HttpTypes.h"
 
 #include <functional>
 #include <mutex>
@@ -17,7 +17,7 @@ struct StringHash {
 	[[nodiscard]] size_t operator()(std::string_view value) const noexcept { return std::hash<std::string_view>{}(value); }
 };
 
-class KVStore : public RequestHandler {
+class KVStore {
 public:
 	void set(std::string key, std::string value);
 
@@ -28,7 +28,7 @@ public:
 
 	[[nodiscard]] size_t size() const;
 
-	Response handle(const Request &request) override;
+	Response handle(const Request &request);
 
 private:
 	mutable std::mutex mutex_;

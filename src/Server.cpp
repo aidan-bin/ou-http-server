@@ -245,39 +245,18 @@ void Server::stop() {
 
 void Server::addMiddleware(std::shared_ptr<Middleware> middleware) { middlewares_.push_back(std::move(middleware)); }
 
-void Server::registerPathHandler(Method method, const std::string &path, std::shared_ptr<RequestHandler> handler) {
-	registerPathHandler(method, path, [handler = std::move(handler)](const Request &request) { return handler->handle(request); });
-}
-
 void Server::registerPathHandler(Method method, const std::string &path, Handler handler) {
-	routeHandlers_[method][path] = std::move(handler);
-}
-
-void Server::registerPatternHandler(Method method, const std::string &pattern, std::shared_ptr<RequestHandler> handler) {
-	registerPatternHandler(method, pattern, [handler = std::move(handler)](const Request &request) { return handler->handle(request); });
+	// Re-registering an exact path replaces the handler; patterns accumulate and first match wins
+	pathHandlers_[{ method, path }] = std::move(handler);
 }
 
 void Server::registerPatternHandler(Method method, const std::string &pattern, Handler handler) {
-	patternHandlers_[method].emplace_back(std::regex(pattern), std::move(handler));
-}
-
-void Server::registerPathHandler(std::initializer_list<Method> methods, const std::string &path,
-																 const std::shared_ptr<RequestHandler> &handler) {
-	for (const Method method : methods) {
-		registerPathHandler(method, path, handler);
-	}
+	patternHandlers_.push_back({ .method = method, .pattern = std::regex(pattern), .handler = std::move(handler) });
 }
 
 void Server::registerPathHandler(std::initializer_list<Method> methods, const std::string &path, const Handler &handler) {
 	for (const Method method : methods) {
 		registerPathHandler(method, path, handler);
-	}
-}
-
-void Server::registerPatternHandler(std::initializer_list<Method> methods, const std::string &pattern,
-																		const std::shared_ptr<RequestHandler> &handler) {
-	for (const Method method : methods) {
-		registerPatternHandler(method, pattern, handler);
 	}
 }
 
@@ -390,19 +369,13 @@ Response Server::handleRequest(Request request) const {
 				return response;
 		}
 
-		const auto methodIt = routeHandlers_.find(request.method);
-		if (methodIt != routeHandlers_.end()) {
-			const auto handlerIt = methodIt->second.find(request.path);
-			if (handlerIt != methodIt->second.end())
-				return handlerIt->second(request);
-		}
+		const auto pathHandler = pathHandlers_.find({ request.method, request.path });
+		if (pathHandler != pathHandlers_.end())
+			return pathHandler->second(request);
 
-		const auto patternIt = patternHandlers_.find(request.method);
-		if (patternIt != patternHandlers_.end()) {
-			for (const auto &[pattern, handler] : patternIt->second) {
-				if (std::regex_match(request.path, pattern))
-					return handler(request);
-			}
+		for (const PatternRoute &route : patternHandlers_) {
+			if (route.method == request.method && std::regex_match(request.path, route.pattern))
+				return route.handler(request);
 		}
 
 		return handleStaticFileRequest(request);

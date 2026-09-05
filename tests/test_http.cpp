@@ -179,14 +179,6 @@ public:
 	}
 };
 
-class TestHandler : public RequestHandler {
-public:
-	Response handle(const Request &request) override {
-		(void)request;
-		return Response::plainText(200, "Handled by TestHandler");
-	}
-};
-
 BOOST_AUTO_TEST_CASE(test_custom_handler_and_middleware) {
 	TestServer::Config config;
 	config.servingDirectory = ".";
@@ -194,7 +186,7 @@ BOOST_AUTO_TEST_CASE(test_custom_handler_and_middleware) {
 	TestServer server(config);
 
 	server.addMiddleware(std::make_shared<TestMiddleware>());
-	server.registerPathHandler(Method::GET, "/test", std::make_shared<TestHandler>());
+	server.registerPathHandler(Method::GET, "/test", [](const Request &) { return Response::plainText(200, "Handled by TestHandler"); });
 	server.registerPatternHandler(Method::GET, R"(/pattern/\d+)", [](const Request &req) {
 		(void)req;
 		return Response::plainText(200, "Pattern function handler");

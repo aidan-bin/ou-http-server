@@ -1,8 +1,7 @@
 #include "HttpTypes.h"
 
 #include <algorithm>
-#include <cctype>
-#include <limits>
+#include <charconv>
 #include <ostream>
 #include <ranges>
 
@@ -18,15 +17,16 @@ namespace {
 		return ch;
 	}
 
-	constexpr std::optional<unsigned> sHexValue(char ch) {
-		if (ch >= '0' && ch <= '9')
-			return static_cast<unsigned>(ch - '0');
-		if (ch >= 'a' && ch <= 'f')
-			return static_cast<unsigned>(ch - 'a') + 10;
-		if (ch >= 'A' && ch <= 'F')
-			return static_cast<unsigned>(ch - 'A') + 10;
-		return std::nullopt;
+	// NOLINTBEGIN(cppcoreguidelines-pro-bounds-pointer-arithmetic,bugprone-suspicious-stringview-data-usage)
+	template <typename T> std::optional<T> sParseNumber(std::string_view text, int base = 10) {
+		T value{};
+		const char *end = text.data() + text.size();
+		const auto [stopped, ec] = std::from_chars(text.data(), end, value, base);
+		if (ec != std::errc{} || stopped != end)
+			return std::nullopt;
+		return value;
 	}
+	// NOLINTEND(cppcoreguidelines-pro-bounds-pointer-arithmetic,bugprone-suspicious-stringview-data-usage)
 
 } // namespace
 
@@ -52,10 +52,8 @@ std::string percentDecode(std::string_view input, bool plusAsSpace) {
 		}
 
 		if (input[i] == '%' && i + 2 < input.size()) {
-			const std::optional<unsigned> high = sHexValue(input[i + 1]);
-			const std::optional<unsigned> low = sHexValue(input[i + 2]);
-			if (high && low) {
-				decoded += static_cast<char>((*high * 16) + *low);
+			if (const std::optional<unsigned char> byte = sParseNumber<unsigned char>(input.substr(i + 1, 2), 16)) {
+				decoded += static_cast<char>(*byte);
 				i += 2;
 				continue;
 			}
@@ -121,12 +119,11 @@ std::pair<std::string_view, std::string_view> Request::split_at(std::string_view
 }
 
 std::string_view Request::trim(std::string_view str) {
-	auto isSpace = [](unsigned char ch) {
-		return std::isspace(ch) != 0;
-	};
-	str.remove_prefix(std::ranges::distance(str | std::views::take_while(isSpace)));
-	str.remove_suffix(std::ranges::distance(str | std::views::reverse | std::views::take_while(isSpace)));
-	return str;
+	constexpr std::string_view kWhitespace = " \t\n\v\f\r";
+	const size_t first = str.find_first_not_of(kWhitespace);
+	if (first == std::string_view::npos)
+		return {};
+	return str.substr(first, str.find_last_not_of(kWhitespace) - first + 1);
 }
 
 std::optional<Request> Request::parse(std::string_view raw) {
@@ -197,23 +194,7 @@ std::optional<size_t> Request::contentLength() const {
 	if (!value)
 		return std::nullopt;
 
-	const std::string_view digits = trim(*value);
-	if (digits.empty())
-		return std::nullopt;
-
-	size_t length = 0;
-	for (const char ch : digits) {
-		if (ch < '0' || ch > '9')
-			return std::nullopt;
-
-		const auto digit = static_cast<size_t>(ch - '0');
-		if (length > (std::numeric_limits<size_t>::max() - digit) / 10)
-			return std::nullopt;
-
-		length = (length * 10) + digit;
-	}
-
-	return length;
+	return sParseNumber<size_t>(trim(*value));
 }
 
 std::string Response::serialize() const {
