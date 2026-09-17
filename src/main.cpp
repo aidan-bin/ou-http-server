@@ -3,11 +3,14 @@
 #include "Logging.h"
 #include "Server.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <csignal>
 #include <exception>
 #include <memory>
+#include <span>
+#include <string_view>
 #include <thread>
 
 namespace {
@@ -17,7 +20,7 @@ std::atomic<bool> g_running{ true };
 
 void sSignalHandler(int /*signum*/) { g_running.store(false); }
 
-int runServer() {
+int runServer(bool useEventLoop) {
 	using namespace ou::http;
 
 	Server::Config config;
@@ -25,15 +28,12 @@ int runServer() {
 	config.port = 8080;
 	config.threadCount = 4;
 	config.enableDirectoryIndexing = true;
+	config.model = useEventLoop ? Server::Model::EventLoop : Server::Model::ThreadPerCore;
 #ifndef DISABLE_HTTPS
 	config.https = { .enabled = true, .certPath = "./example/certs/cert.pem", .keyPath = "./example/certs/key.pem" };
 #endif
 
 	Server server(config);
-	if (!server.init()) {
-		LOG_ERROR("Server initialization failed");
-		return EXIT_FAILURE;
-	}
 
 	const AccessLog::Config accessLogConfig = { .path = "access.log" };
 	server.addMiddleware(std::make_shared<AccessLog>(accessLogConfig));
@@ -42,7 +42,10 @@ int runServer() {
 	server.registerPathHandler({ Method::GET, Method::PUT, Method::DELETE }, "/kv",
 														 [kvStore](const Request &request) { return kvStore->handle(request); });
 
-	server.start();
+	if (!server.start()) {
+		LOG_ERROR("Server failed to start");
+		return EXIT_FAILURE;
+	}
 
 	while (g_running.load()) {
 		std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -56,13 +59,18 @@ int runServer() {
 
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
+	const std::span args(argv, static_cast<size_t>(argc));
+
+	// TODO: arg parser?
+	const bool useEventLoop = std::ranges::any_of(args.subspan(1), [](const char *arg) { return std::string_view(arg) == "--eventloop"; });
+
 	(void)std::signal(SIGINT, sSignalHandler);
 	// A peer that disconnects mid-write would otherwise kill the process
 	(void)std::signal(SIGPIPE, SIG_IGN);
 
 	try {
-		return runServer();
+		return runServer(useEventLoop);
 	} catch (const std::exception &e) {
 		LOG_ERROR("Fatal error: {}", e.what());
 		return EXIT_FAILURE;

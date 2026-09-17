@@ -25,12 +25,12 @@ def build(disable_https):
 	run_command(cmake_cmd, cwd=BUILD_DIR)
 	run_command(["make"], cwd=BUILD_DIR)
 
-def run_main():
+def run_main(event_loop):
 	exe_path = os.path.join(BUILD_DIR, "toy_http_server")
 	if not os.path.isfile(exe_path):
 		print("Executable not found. Please build first.")
 		sys.exit(1)
-	run_command([exe_path])
+	run_command([exe_path] + (["--eventloop"] if event_loop else []))
 
 def run_tests():
 	if not os.path.isdir(BUILD_DIR):
@@ -59,7 +59,8 @@ def main():
 	build_parser = subparsers.add_parser("build", help="Build the project locally")
 	build_parser.add_argument("--disable-https", action="store_true", help="Disable HTTPS support in the build")
 
-	subparsers.add_parser("run", help="Run the main program locally")
+	run_parser = subparsers.add_parser("run", help="Run the main program locally")
+	run_parser.add_argument("--eventloop", action="store_true", help="Serve with the epoll/kqueue event loop instead of thread-per-core")
 	subparsers.add_parser("test", help="Run the unit tests locally")
 	subparsers.add_parser("tidy", help="Run clang-tidy over src/ and tests/ (requires a prior build)")
 	subparsers.add_parser("docker-build", help="Build the Docker image")
@@ -70,7 +71,7 @@ def main():
 	if args.command == "build":
 		build(args.disable_https)
 	elif args.command == "run":
-		run_main()
+		run_main(args.eventloop)
 	elif args.command == "test":
 		run_tests()
 	elif args.command == "tidy":

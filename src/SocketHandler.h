@@ -1,12 +1,34 @@
 #pragma once
 
 #include <cerrno>
+#include <cstddef>
+#include <cstdint>
 #include <span>
 #include <string_view>
+
+#include <fcntl.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
 namespace ou {
+
+enum class IoStatus : uint8_t { Ok, WantRead, WantWrite, Closed, Error };
+
+struct IoResult {
+	IoStatus status = IoStatus::Ok;
+	size_t bytes = 0;
+};
+
+inline bool setNonBlocking(int fd, bool enable) {
+	// NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+	const int flags = ::fcntl(fd, F_GETFL, 0);
+	if (flags < 0)
+		return false;
+
+	const int updated = enable ? (flags | O_NONBLOCK) : (flags & ~O_NONBLOCK);
+	// NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+	return ::fcntl(fd, F_SETFL, updated) >= 0;
+}
 
 class SocketHandler {
 public:
@@ -17,39 +39,68 @@ public:
 	SocketHandler &operator=(SocketHandler &&) = delete;
 	virtual ~SocketHandler() = default;
 
-	virtual bool acceptConnection(int clientSocket) = 0;
-	virtual ssize_t read(int clientSocket, std::span<char> buffer) = 0;
-	virtual ssize_t write(int clientSocket, std::string_view data) = 0;
+	// A handshake still in flight reports WantRead/WantWrite and resumes on the next call
+	virtual IoResult acceptConnection(int clientSocket) = 0;
+
+	virtual IoResult read(int clientSocket, std::span<char> buffer) = 0;
+
+	// May write less than asked; the caller resumes from result.bytes
+	virtual IoResult write(int clientSocket, std::string_view data) = 0;
+
 	virtual void closeConnection(int clientSocket) = 0;
-};
 
-class PlainSocketHandler : public SocketHandler {
-public:
-	bool acceptConnection(int clientSocket) override final {
-		(void)clientSocket;
-		return true;
-	}
-
-	ssize_t read(int clientSocket, std::span<char> buffer) override final { return ::read(clientSocket, buffer.data(), buffer.size()); }
-
-	ssize_t write(int clientSocket, std::string_view data) override final {
+	// Correct only on a blocking socket
+	IoResult writeAll(int clientSocket, std::string_view data) {
 		size_t written = 0;
 		while (written < data.size()) {
-			const std::string_view remaining = data.substr(written);
-			const ssize_t sent = ::send(clientSocket, remaining.data(), remaining.size(), 0);
-			if (sent < 0) {
-				if (errno == EINTR)
-					continue;
-				return -1;
-			}
-			if (sent == 0)
-				break;
-			written += static_cast<size_t>(sent);
+			const IoResult result = write(clientSocket, data.substr(written));
+			written += result.bytes;
+
+			if (result.status != IoStatus::Ok)
+				return { .status = result.status, .bytes = written };
 		}
-		return static_cast<ssize_t>(written);
+
+		return { .status = IoStatus::Ok, .bytes = written };
+	}
+};
+
+class PlainSocketHandler final : public SocketHandler {
+public:
+	IoResult acceptConnection(int clientSocket) override final {
+		(void)clientSocket;
+		return {};
+	}
+
+	IoResult read(int clientSocket, std::span<char> buffer) override final {
+		ssize_t bytesRead = 0;
+		while ((bytesRead = ::read(clientSocket, buffer.data(), buffer.size())) < 0 && errno == EINTR) {
+		}
+
+		if (bytesRead > 0)
+			return { .status = IoStatus::Ok, .bytes = static_cast<size_t>(bytesRead) };
+		if (bytesRead == 0)
+			return { .status = IoStatus::Closed };
+
+		return { .status = wouldBlock() ? IoStatus::WantRead : IoStatus::Error };
+	}
+
+	IoResult write(int clientSocket, std::string_view data) override final {
+		ssize_t sent = 0;
+		while ((sent = ::send(clientSocket, data.data(), data.size(), 0)) < 0 && errno == EINTR) {
+		}
+
+		if (sent > 0)
+			return { .status = IoStatus::Ok, .bytes = static_cast<size_t>(sent) };
+		if (sent == 0)
+			return { .status = IoStatus::Closed };
+
+		return { .status = wouldBlock() ? IoStatus::WantWrite : IoStatus::Error };
 	}
 
 	void closeConnection(int clientSocket) override final { ::close(clientSocket); }
+
+private:
+	static bool wouldBlock() { return errno == EAGAIN || errno == EWOULDBLOCK; }
 };
 
 } // namespace ou

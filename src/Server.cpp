@@ -1,5 +1,7 @@
 #include "Server.h"
+#include "EventLoop.h"
 #include "Logging.h"
+#include "RequestReader.h"
 
 #include <algorithm>
 #include <array>
@@ -8,7 +10,6 @@
 #include <system_error>
 #include <utility>
 
-#include <fcntl.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <sys/socket.h>
@@ -16,21 +17,8 @@
 
 namespace {
 
-constexpr size_t kReadChunkBytes = 4096;
-
 constexpr int kAcceptPollMs = 200;
 constexpr auto kAcceptRetryDelay = std::chrono::milliseconds(10);
-
-bool sSetNonBlocking(int fd, bool enable) {
-	// NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
-	const int flags = ::fcntl(fd, F_GETFL, 0);
-	if (flags < 0)
-		return false;
-
-	const int updated = enable ? (flags | O_NONBLOCK) : (flags & ~O_NONBLOCK);
-	// NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
-	return ::fcntl(fd, F_SETFL, updated) >= 0;
-}
 
 constexpr std::array<std::pair<std::string_view, std::string_view>, 14> kMimeTypes{ {
 		{ ".html", "text/html" },
@@ -144,7 +132,7 @@ int sAcceptOne(int serverSocket, sockaddr_in &clientAddr) {
 		return -1;
 	}
 
-	(void)sSetNonBlocking(clientSocket, false);
+	(void)ou::setNonBlocking(clientSocket, false);
 	return clientSocket;
 }
 
@@ -156,8 +144,8 @@ Server::Server(Config config) : config_(std::move(config)) {}
 
 Server::~Server() { stop(); }
 
-bool Server::init() {
-	LOG_INFO("Initializing server on port {} with {} threads...", config_.port, config_.threadCount);
+bool Server::start() {
+	LOG_INFO("Starting server on port {} with {} threads...", config_.port, config_.threadCount);
 
 	try {
 #ifndef DISABLE_HTTPS
@@ -173,62 +161,57 @@ bool Server::init() {
 		return false;
 	}
 
-	std::vector<UniqueFd> sockets;
-	sockets.reserve(config_.threadCount);
-
-	for (unsigned i = 0; i < config_.threadCount; ++i) {
-		UniqueFd serverSocket(socket(AF_INET, SOCK_STREAM, 0));
-		if (!serverSocket) {
-			LOG_ERROR("Failed to create socket");
-			return false;
-		}
-
-		const int opt = 1;
-		if (setsockopt(serverSocket.get(), SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt)) < 0) {
-			LOG_ERROR("Failed to set SO_REUSEPORT");
-			return false;
-		}
-
-		sockaddr_in addr{};
-		addr.sin_family = AF_INET;
-		addr.sin_addr.s_addr = INADDR_ANY;
-		addr.sin_port = htons(config_.port);
-
-		if (bind(serverSocket.get(), reinterpret_cast<struct sockaddr *>(&addr), sizeof(addr)) < 0) {
-			LOG_ERROR("Failed to bind socket");
-			return false;
-		}
-
-		if (listen(serverSocket.get(), SOMAXCONN) < 0) {
-			LOG_ERROR("Failed to listen on socket");
-			return false;
-		}
-
-		// Non-blocking so the accept loop can poll and notice stop() without being closed out from under it
-		if (!sSetNonBlocking(serverSocket.get(), true)) {
-			LOG_ERROR("Failed to set socket non-blocking");
-			return false;
-		}
-
-		LOG_INFO("Server socket {} bound and listening...", serverSocket.get());
-		sockets.push_back(std::move(serverSocket));
+	UniqueFd serverSocket(socket(AF_INET, SOCK_STREAM, 0));
+	if (!serverSocket) {
+		LOG_ERROR("Failed to create socket");
+		return false;
 	}
 
-	sockets_ = std::move(sockets);
-	return true;
-}
+	const int opt = 1;
+	if (setsockopt(serverSocket.get(), SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+		LOG_ERROR("Failed to set SO_REUSEADDR");
+		return false;
+	}
 
-void Server::start() {
-	LOG_INFO("Starting server...");
+	sockaddr_in addr{};
+	addr.sin_family = AF_INET;
+	addr.sin_addr.s_addr = INADDR_ANY;
+	addr.sin_port = htons(config_.port);
+
+	if (bind(serverSocket.get(), reinterpret_cast<struct sockaddr *>(&addr), sizeof(addr)) < 0) {
+		LOG_ERROR("Failed to bind socket");
+		return false;
+	}
+
+	if (listen(serverSocket.get(), SOMAXCONN) < 0) {
+		LOG_ERROR("Failed to listen on socket");
+		return false;
+	}
+
+	// Non-blocking so the accept loop can poll and notice stop() without being closed out from under it
+	if (!setNonBlocking(serverSocket.get(), true)) {
+		LOG_ERROR("Failed to set socket non-blocking");
+		return false;
+	}
+
+	LOG_INFO("Server socket {} bound and listening...", serverSocket.get());
+	listenSocket_ = std::move(serverSocket);
+
 	running_.store(true);
-	for (const auto &socket : sockets_) {
-		threads_.emplace_back([this, fd = socket.get()]() { workerThread(fd); });
+	for (unsigned i = 0; i < config_.threadCount; ++i) {
+		threads_.emplace_back([this, fd = listenSocket_.get()]() {
+			if (config_.model == Model::EventLoop)
+				eventLoopThread(fd);
+			else
+				workerThread(fd);
+		});
 	}
+	return true;
 }
 
 void Server::stop() {
 	running_.store(false);
-	if (sockets_.empty() && threads_.empty())
+	if (!listenSocket_ && threads_.empty())
 		return;
 
 	LOG_INFO("Stopping server...");
@@ -238,7 +221,7 @@ void Server::stop() {
 			thread.join();
 	}
 	threads_.clear();
-	sockets_.clear();
+	listenSocket_.reset();
 
 	LOG_INFO("Server stopped");
 }
@@ -267,49 +250,25 @@ void Server::registerPatternHandler(std::initializer_list<Method> methods, const
 }
 
 std::variant<Request, int> Server::readRequest(int clientSocket) const {
-	std::string raw;
-	std::array<char, kReadChunkBytes> chunk{};
+	RequestReader reader(config_.maxRequestBytes);
+	std::array<char, RequestReader::kChunkBytes> chunk{};
 
-	size_t headerEnd = std::string::npos;
-	size_t totalSize = 0;
-	std::optional<Request> request;
-
-	while (!request || raw.size() < totalSize) {
-		const ssize_t bytesRead = socketHandler_->read(clientSocket, chunk);
-		if (bytesRead <= 0) {
+	while (true) {
+		const IoResult result = socketHandler_->read(clientSocket, chunk);
+		if (result.status != IoStatus::Ok) {
 			// Timed out, or the peer went away before finishing
-			return raw.empty() ? 0 : 408;
+			return reader.empty() ? 0 : 408;
 		}
 
-		raw.append(chunk.data(), static_cast<size_t>(bytesRead));
-		if (raw.size() > config_.maxRequestBytes)
-			return 413;
-
-		if (headerEnd == std::string::npos) {
-			headerEnd = raw.find("\r\n\r\n");
-			if (headerEnd == std::string::npos)
-				continue;
-		}
-
-		if (!request) {
-			request = Request::parse(raw);
-			if (!request)
-				return 400;
-
-			if (request->header("Transfer-Encoding"))
-				return 501;
-
-			totalSize = headerEnd + 4 + request->contentLength().value_or(0);
-			if (totalSize > config_.maxRequestBytes)
-				return 413;
+		switch (reader.consume({ chunk.data(), result.bytes })) {
+		case RequestReader::Status::NeedMore:
+			break;
+		case RequestReader::Status::Complete:
+			return reader.take();
+		case RequestReader::Status::Rejected:
+			return reader.rejectStatus();
 		}
 	}
-
-	// Truncate any bytes past Content-Length that arrived in the same read
-	const size_t bodyStart = headerEnd + 4;
-	request->body.assign(raw, bodyStart, totalSize - bodyStart);
-
-	return std::move(*request);
 }
 
 void Server::handleConnection(int clientSocket, const sockaddr_in &clientAddr) const {
@@ -317,7 +276,7 @@ void Server::handleConnection(int clientSocket, const sockaddr_in &clientAddr) c
 	(void)setsockopt(clientSocket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
 	(void)setsockopt(clientSocket, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
 
-	if (!socketHandler_->acceptConnection(clientSocket))
+	if (socketHandler_->acceptConnection(clientSocket).status != IoStatus::Ok)
 		return;
 
 	std::variant<Request, int> result = readRequest(clientSocket);
@@ -327,7 +286,7 @@ void Server::handleConnection(int clientSocket, const sockaddr_in &clientAddr) c
 			return;
 
 		LOG_WARN("Rejecting request from {} with status {}", addressToString(clientAddr), *status);
-		(void)socketHandler_->write(clientSocket, Response::error(*status).serialize());
+		(void)socketHandler_->writeAll(clientSocket, Response::error(*status).serialize());
 		return;
 	}
 
@@ -337,7 +296,7 @@ void Server::handleConnection(int clientSocket, const sockaddr_in &clientAddr) c
 	const std::string requestLine = std::format("{} {}", request.method, request.path);
 	const Response response = handleRequest(std::move(request));
 	LOG_INFO("{} from {} -> {}", requestLine, addressToString(clientAddr), response.statusCode);
-	(void)socketHandler_->write(clientSocket, response.serialize());
+	(void)socketHandler_->writeAll(clientSocket, response.serialize());
 }
 
 void Server::workerThread(int serverSocket) {
@@ -358,6 +317,16 @@ void Server::workerThread(int serverSocket) {
 
 		socketHandler_->closeConnection(clientSocket);
 	}
+}
+
+void Server::eventLoopThread(int serverSocket) {
+	const EventLoop::Config config{ .listenSocket = serverSocket,
+																	.maxRequestBytes = config_.maxRequestBytes,
+																	.idleTimeout = config_.readTimeout };
+
+	// Pass control to event loop logic; delegates request handling to Server
+	EventLoop loop(config, *socketHandler_, [this](Request request) { return handleRequest(std::move(request)); });
+	loop.run(running_);
 }
 
 Response Server::handleRequest(Request request) const {

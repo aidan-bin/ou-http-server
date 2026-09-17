@@ -8,6 +8,7 @@
 #include <limits>
 #include <stdexcept>
 #include <unistd.h>
+#include <unordered_map>
 
 #include <openssl/err.h>
 
@@ -18,9 +19,36 @@ namespace {
 	// Large transfers are chunked since SSL_write() only takes an int
 	constexpr size_t kMaxTransfer = static_cast<size_t>(std::numeric_limits<int>::max());
 
-	// Per-thread because a worker serves one connection at a time and belongs to a single SSLSocketHandler
+	// Thread-local so it needs no lock; a map because one event loop thread holds many connections
 	// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables) thread-local by design
-	thread_local SSL *g_session = nullptr;
+	thread_local std::unordered_map<int, SSL *> g_sessions;
+
+	SSL *sSession(int clientSocket) {
+		const auto session = g_sessions.find(clientSocket);
+		return session != g_sessions.end() ? session->second : nullptr;
+	}
+
+	void sDiscardSession(int clientSocket) {
+		const auto session = g_sessions.find(clientSocket);
+		if (session == g_sessions.end())
+			return;
+
+		SSL_free(session->second);
+		g_sessions.erase(session);
+	}
+
+	IoResult sStatusFor(SSL *ssl, int result) {
+		switch (SSL_get_error(ssl, result)) {
+		case SSL_ERROR_WANT_READ:
+			return { .status = IoStatus::WantRead };
+		case SSL_ERROR_WANT_WRITE:
+			return { .status = IoStatus::WantWrite };
+		case SSL_ERROR_ZERO_RETURN:
+			return { .status = IoStatus::Closed };
+		default:
+			return { .status = IoStatus::Error };
+		}
+	}
 
 } // namespace
 
@@ -36,55 +64,59 @@ SSLSocketHandler::SSLSocketHandler(const Config &config) : sslCtx_(SSL_CTX_new(T
 
 SSLSocketHandler::~SSLSocketHandler() { SSL_CTX_free(sslCtx_); }
 
-bool SSLSocketHandler::acceptConnection(int clientSocket) {
-	SSL *ssl = SSL_new(sslCtx_);
-	if (ssl == nullptr)
-		return false;
+IoResult SSLSocketHandler::acceptConnection(int clientSocket) {
+	SSL *ssl = sSession(clientSocket);
+	if (ssl == nullptr) {
+		ssl = SSL_new(sslCtx_);
+		if (ssl == nullptr)
+			return { .status = IoStatus::Error };
 
-	SSL_set_fd(ssl, clientSocket);
-	if (SSL_accept(ssl) <= 0) {
-		SSL_free(ssl);
-		return false;
+		SSL_set_fd(ssl, clientSocket);
+		g_sessions.emplace(clientSocket, ssl);
 	}
 
-	g_session = ssl;
-	return true;
+	const int result = SSL_accept(ssl);
+	if (result == 1)
+		return {};
+
+	const IoResult status = sStatusFor(ssl, result);
+	if (status.status != IoStatus::WantRead && status.status != IoStatus::WantWrite)
+		sDiscardSession(clientSocket);
+
+	return status;
 }
 
-ssize_t SSLSocketHandler::read(int clientSocket, std::span<char> buffer) {
-	(void)clientSocket;
-	if (g_session == nullptr)
-		return -1;
+IoResult SSLSocketHandler::read(int clientSocket, std::span<char> buffer) {
+	SSL *ssl = sSession(clientSocket);
+	if (ssl == nullptr)
+		return { .status = IoStatus::Error };
 
 	const auto size = static_cast<int>(std::min(buffer.size(), kMaxTransfer));
-	return SSL_read(g_session, buffer.data(), size);
+	const int bytesRead = SSL_read(ssl, buffer.data(), size);
+	if (bytesRead > 0)
+		return { .status = IoStatus::Ok, .bytes = static_cast<size_t>(bytesRead) };
+
+	return sStatusFor(ssl, bytesRead);
 }
 
-ssize_t SSLSocketHandler::write(int clientSocket, std::string_view data) {
-	(void)clientSocket;
-	if (g_session == nullptr)
-		return -1;
+IoResult SSLSocketHandler::write(int clientSocket, std::string_view data) {
+	SSL *ssl = sSession(clientSocket);
+	if (ssl == nullptr)
+		return { .status = IoStatus::Error };
 
-	size_t written = 0;
-	while (written < data.size()) {
-		const std::string_view remaining = data.substr(written);
-		const auto size = static_cast<int>(std::min(remaining.size(), kMaxTransfer));
+	// Partial writes are off: all of this chunk goes out, or none of it
+	const auto size = static_cast<int>(std::min(data.size(), kMaxTransfer));
+	const int sent = SSL_write(ssl, data.data(), size);
+	if (sent > 0)
+		return { .status = IoStatus::Ok, .bytes = static_cast<size_t>(sent) };
 
-		const int sent = SSL_write(g_session, remaining.data(), size);
-		if (sent <= 0)
-			return -1;
-
-		written += static_cast<size_t>(sent);
-	}
-
-	return static_cast<ssize_t>(written);
+	return sStatusFor(ssl, sent);
 }
 
 void SSLSocketHandler::closeConnection(int clientSocket) {
-	if (g_session != nullptr) {
-		SSL_shutdown(g_session);
-		SSL_free(g_session);
-		g_session = nullptr;
+	if (SSL *ssl = sSession(clientSocket); ssl != nullptr) {
+		SSL_shutdown(ssl);
+		sDiscardSession(clientSocket);
 	}
 
 	::close(clientSocket);

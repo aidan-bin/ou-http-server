@@ -5,14 +5,18 @@
 #include "HttpTypes.h"
 #include "KVStore.h"
 #include "Logging.h"
+#include "Poller.h"
 #include "Server.h"
 #include "UniqueFd.h"
 
 #include <arpa/inet.h>
+#include <array>
 #include <cerrno>
+#include <chrono>
 #include <fcntl.h>
 #include <filesystem>
 #include <fstream>
+#include <initializer_list>
 #include <memory>
 #include <netinet/in.h>
 #include <string>
@@ -426,11 +430,43 @@ BOOST_AUTO_TEST_CASE(test_unique_fd_closes_once) {
 	BOOST_CHECK_EQUAL(errno, EBADF);
 }
 
+// --- Poller ---
+
+BOOST_AUTO_TEST_CASE(test_poller_readiness) {
+	std::array<int, 2> pair{};
+	BOOST_REQUIRE_EQUAL(::socketpair(AF_UNIX, SOCK_STREAM, 0, pair.data()), 0);
+	const ou::UniqueFd local(pair[0]);
+	const ou::UniqueFd peer(pair[1]);
+
+	ou::Poller poller;
+	BOOST_REQUIRE(poller.valid());
+	BOOST_REQUIRE(poller.add(local.get(), ou::Interest::Read));
+
+	using namespace std::chrono_literals;
+	BOOST_CHECK(poller.wait(10ms).empty());
+
+	BOOST_REQUIRE_EQUAL(::write(peer.get(), "x", 1), 1);
+	std::span<const ou::ReadyEvent> ready = poller.wait(500ms);
+	BOOST_REQUIRE_EQUAL(ready.size(), 1U);
+	BOOST_CHECK_EQUAL(ready[0].fd, local.get());
+	BOOST_CHECK(ready[0].readable);
+
+	// Switching interest hides the still-unread byte and reports the empty send buffer instead
+	BOOST_REQUIRE(poller.modify(local.get(), ou::Interest::Write));
+	ready = poller.wait(500ms);
+	BOOST_REQUIRE_EQUAL(ready.size(), 1U);
+	BOOST_CHECK(ready[0].writable);
+	BOOST_CHECK(!ready[0].readable);
+
+	BOOST_REQUIRE(poller.remove(local.get()));
+	BOOST_CHECK(poller.wait(10ms).empty());
+}
+
 // --- Live socket tests ---
 
 namespace {
 
-std::string sRoundTrip(uint16_t port, std::string_view rawRequest) {
+std::string sRoundTrip(uint16_t port, std::initializer_list<std::string_view> pieces) {
 	const ou::UniqueFd fd(::socket(AF_INET, SOCK_STREAM, 0));
 	if (!fd)
 		return {};
@@ -446,8 +482,14 @@ std::string sRoundTrip(uint16_t port, std::string_view rawRequest) {
 	if (::connect(fd.get(), reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) < 0)
 		return {};
 
-	if (::send(fd.get(), rawRequest.data(), rawRequest.size(), 0) < 0)
-		return {};
+	for (const std::string_view piece : pieces) {
+		if (::send(fd.get(), piece.data(), piece.size(), 0) < 0)
+			return {};
+
+		// Long enough that the server sees each piece as its own read
+		if (pieces.size() > 1)
+			std::this_thread::sleep_for(std::chrono::milliseconds(20));
+	}
 
 	std::string response;
 	std::array<char, 4096> chunk{};
@@ -459,6 +501,8 @@ std::string sRoundTrip(uint16_t port, std::string_view rawRequest) {
 	}
 	return response;
 }
+
+std::string sRoundTrip(uint16_t port, std::string_view rawRequest) { return sRoundTrip(port, { rawRequest }); }
 
 } // namespace
 
@@ -472,8 +516,7 @@ BOOST_AUTO_TEST_CASE(test_server_round_trip_over_a_real_socket) {
 	config.threadCount = 2;
 
 	Server server(config);
-	BOOST_REQUIRE(server.init());
-	server.start();
+	BOOST_REQUIRE(server.start());
 
 	const std::string ok = sRoundTrip(config.port, "GET /hello.txt HTTP/1.1\r\nHost: localhost\r\n\r\n");
 	BOOST_CHECK(ok.starts_with("HTTP/1.1 200 OK"));
@@ -495,6 +538,77 @@ BOOST_AUTO_TEST_CASE(test_server_round_trip_over_a_real_socket) {
 	server.stop();
 	server.stop();
 
+	std::filesystem::remove_all(root);
+}
+
+BOOST_AUTO_TEST_CASE(test_event_loop_serves_requests) {
+	const std::filesystem::path root = sMakeTempDir("eventloop");
+	sWriteFile(root / "hello.txt", "hello loop");
+	// Larger than a socket buffer, so the response goes out over several writes
+	sWriteFile(root / "large.txt", std::string(200000, 'x'));
+
+	Server::Config config;
+	config.servingDirectory = root;
+	config.port = 18174;
+	config.threadCount = 2;
+	config.model = Server::Model::EventLoop;
+
+	Server server(config);
+	BOOST_REQUIRE(server.start());
+
+	const std::string ok = sRoundTrip(config.port, "GET /hello.txt HTTP/1.1\r\nHost: localhost\r\n\r\n");
+	BOOST_CHECK(ok.starts_with("HTTP/1.1 200 OK"));
+	BOOST_CHECK(ok.ends_with("hello loop"));
+
+	const std::string missing = sRoundTrip(config.port, "GET /nope.txt HTTP/1.1\r\nHost: localhost\r\n\r\n");
+	BOOST_CHECK(missing.starts_with("HTTP/1.1 404"));
+
+	const std::string malformed = sRoundTrip(config.port, "BOGUS / HTTP/1.1\r\nHost: localhost\r\n\r\n");
+	BOOST_CHECK(malformed.starts_with("HTTP/1.1 400"));
+
+	const std::string large = sRoundTrip(config.port, "GET /large.txt HTTP/1.1\r\nHost: localhost\r\n\r\n");
+	BOOST_CHECK(large.starts_with("HTTP/1.1 200 OK"));
+	BOOST_CHECK_EQUAL(large.size() - large.find("\r\n\r\n") - 4, 200000U);
+
+	const std::string split = sRoundTrip(config.port, { "GET /hello.txt HTTP/1.1\r\nHost: ", "localhost\r\n", "\r\n" });
+	BOOST_CHECK(split.starts_with("HTTP/1.1 200 OK"));
+	BOOST_CHECK(split.ends_with("hello loop"));
+
+	server.stop();
+	server.stop();
+
+	std::filesystem::remove_all(root);
+}
+
+BOOST_AUTO_TEST_CASE(test_event_loop_closes_idle_connection) {
+	const std::filesystem::path root = sMakeTempDir("eventloop-idle");
+
+	Server::Config config;
+	config.servingDirectory = root;
+	config.port = 18175;
+	config.threadCount = 1;
+	config.model = Server::Model::EventLoop;
+	config.readTimeout = std::chrono::seconds(1);
+
+	Server server(config);
+	BOOST_REQUIRE(server.start());
+
+	const ou::UniqueFd fd(::socket(AF_INET, SOCK_STREAM, 0));
+	BOOST_REQUIRE(fd.valid());
+
+	sockaddr_in address{};
+	address.sin_family = AF_INET;
+	address.sin_port = htons(config.port);
+	address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+	BOOST_REQUIRE_EQUAL(::connect(fd.get(), reinterpret_cast<sockaddr *>(&address), sizeof(address)), 0);
+
+	const timeval timeout{ .tv_sec = 10, .tv_usec = 0 };
+	(void)::setsockopt(fd.get(), SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+
+	std::array<char, 64> chunk{};
+	BOOST_CHECK_EQUAL(::recv(fd.get(), chunk.data(), chunk.size(), 0), 0);
+
+	server.stop();
 	std::filesystem::remove_all(root);
 }
 

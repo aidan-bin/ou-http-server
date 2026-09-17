@@ -8,6 +8,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <initializer_list>
@@ -43,11 +44,14 @@ class Server {
 public:
 	using Handler = std::function<Response(const Request &)>;
 
+	enum class Model : uint8_t { ThreadPerCore, EventLoop };
+
 	struct Config {
 		std::filesystem::path servingDirectory;
 		uint16_t port = 8080;
 		unsigned threadCount = 4;
 		bool enableDirectoryIndexing = false;
+		Model model = Model::ThreadPerCore;
 
 		// Requests over this limit are rejected with 413
 		size_t maxRequestBytes = size_t{ 1024 } * 1024;
@@ -66,8 +70,7 @@ public:
 	Server &operator=(Server &&) = delete;
 	~Server();
 
-	[[nodiscard]] bool init();
-	void start();
+	[[nodiscard]] bool start();
 	void stop();
 
 	void addMiddleware(std::shared_ptr<Middleware> middleware);
@@ -90,17 +93,17 @@ private:
 	};
 
 	void workerThread(int serverSocket);
+	void eventLoopThread(int serverSocket);
 
-	// Never throws, and never closes the socket
-	void handleConnection(int clientSocket, const sockaddr_in &clientAddr) const;
-
-	// Reads one complete request, or the status to answer with instead (0 = close silently)
-	[[nodiscard]] std::variant<Request, int> readRequest(int clientSocket) const;
+	// Model::ThreadPerCore logic
+	void handleConnection(int clientSocket, const sockaddr_in &clientAddr) const; // Never throws, and never closes the socket
+	[[nodiscard]] std::variant<Request, int>
+	readRequest(int clientSocket) const; // Reads one complete request, or the status to answer with instead (0 = close silently)
 
 	Config config_;
 	std::atomic<bool> running_{ false };
 	std::vector<std::thread> threads_;
-	std::vector<UniqueFd> sockets_; // One per worker thread
+	UniqueFd listenSocket_; // Shared by every worker thread
 
 	// Exact paths are looked up; patterns are tried in registration order
 	std::map<std::pair<Method, std::string>, Handler> pathHandlers_;

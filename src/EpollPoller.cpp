@@ -1,0 +1,57 @@
+#include "Poller.h"
+
+#ifdef __linux__
+
+#include <algorithm>
+#include <array>
+#include <cerrno>
+#include <span>
+
+#include <sys/epoll.h>
+
+namespace ou {
+
+namespace {
+
+	bool sControl(int queue, int op, int fd, Interest interest) {
+		epoll_event event{};
+		event.events = interest == Interest::Write ? EPOLLOUT : EPOLLIN;
+		event.data.fd = fd;
+		return epoll_ctl(queue, op, fd, &event) == 0;
+	}
+
+} // namespace
+
+Poller::Poller() : queue_(epoll_create1(EPOLL_CLOEXEC)) {}
+
+bool Poller::add(int fd, Interest interest) { return sControl(queue_.get(), EPOLL_CTL_ADD, fd, interest); }
+
+bool Poller::modify(int fd, Interest interest) { return sControl(queue_.get(), EPOLL_CTL_MOD, fd, interest); }
+
+bool Poller::remove(int fd) { return epoll_ctl(queue_.get(), EPOLL_CTL_DEL, fd, nullptr) == 0; }
+
+std::span<const ReadyEvent> Poller::wait(std::chrono::milliseconds timeout) {
+	std::array<epoll_event, kMaxEvents> events{};
+
+	int count = 0;
+	while (true) {
+		count = epoll_wait(queue_.get(), events.data(), static_cast<int>(events.size()), static_cast<int>(timeout.count()));
+		if (count >= 0 || errno != EINTR)
+			break;
+	}
+
+	ready_.clear();
+
+	for (const epoll_event &event : std::span(events).first(static_cast<size_t>(std::max(count, 0)))) {
+		// Hangup or error is reported as readable: the read that follows reports Closed (one teardown path)
+		ready_.push_back({ .fd = event.data.fd,
+											 .readable = (event.events & (EPOLLIN | EPOLLHUP | EPOLLERR)) != 0,
+											 .writable = (event.events & EPOLLOUT) != 0 });
+	}
+
+	return ready_;
+}
+
+} // namespace ou
+
+#endif // __linux__

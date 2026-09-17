@@ -27,9 +27,9 @@ public:
 	SSLSocketHandler &operator=(SSLSocketHandler &&) = delete;
 	~SSLSocketHandler() override;
 
-	bool acceptConnection(int clientSocket) override final;
-	ssize_t read(int clientSocket, std::span<char> buffer) override final;
-	ssize_t write(int clientSocket, std::string_view data) override final;
+	IoResult acceptConnection(int clientSocket) override final;
+	IoResult read(int clientSocket, std::span<char> buffer) override final;
+	IoResult write(int clientSocket, std::string_view data) override final;
 	void closeConnection(int clientSocket) override final;
 
 private:
