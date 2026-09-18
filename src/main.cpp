@@ -66,6 +66,7 @@ int main(int argc, char **argv) {
 	const bool useEventLoop = std::ranges::any_of(args.subspan(1), [](const char *arg) { return std::string_view(arg) == "--eventloop"; });
 
 	(void)std::signal(SIGINT, sSignalHandler);
+	(void)std::signal(SIGTERM, sSignalHandler);
 	// A peer that disconnects mid-write would otherwise kill the process
 	(void)std::signal(SIGPIPE, SIG_IGN);
 

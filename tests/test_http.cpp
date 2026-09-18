@@ -6,21 +6,31 @@
 #include "KVStore.h"
 #include "Logging.h"
 #include "Poller.h"
+#include "RequestReader.h"
 #include "Server.h"
 #include "UniqueFd.h"
 
 #include <arpa/inet.h>
 #include <array>
 #include <cerrno>
+#include <charconv>
 #include <chrono>
+#include <concepts>
 #include <fcntl.h>
 #include <filesystem>
 #include <fstream>
 #include <initializer_list>
 #include <memory>
 #include <netinet/in.h>
+#include <optional>
+#include <ranges>
+#include <span>
 #include <string>
 #include <sys/socket.h>
+
+#ifndef DISABLE_HTTPS
+#include <openssl/ssl.h>
+#endif
 #include <thread>
 #include <unistd.h>
 #include <vector>
@@ -466,8 +476,8 @@ BOOST_AUTO_TEST_CASE(test_poller_readiness) {
 
 namespace {
 
-std::string sRoundTrip(uint16_t port, std::initializer_list<std::string_view> pieces) {
-	const ou::UniqueFd fd(::socket(AF_INET, SOCK_STREAM, 0));
+ou::UniqueFd sConnect(uint16_t port) {
+	ou::UniqueFd fd(::socket(AF_INET, SOCK_STREAM, 0));
 	if (!fd)
 		return {};
 
@@ -482,6 +492,59 @@ std::string sRoundTrip(uint16_t port, std::initializer_list<std::string_view> pi
 	if (::connect(fd.get(), reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) < 0)
 		return {};
 
+	return fd;
+}
+
+// Length of one complete response, or nullopt while the headers or body are still incomplete
+std::optional<size_t> sResponseLength(std::string_view response) {
+	const size_t headerEnd = response.find("\r\n\r\n");
+	if (headerEnd == std::string_view::npos)
+		return std::nullopt;
+
+	size_t length = headerEnd + 4;
+
+	const std::string_view headers = response.substr(0, headerEnd);
+	for (const auto line : std::views::split(headers, std::string_view("\r\n"))) {
+		const std::string_view field(line.begin(), line.end());
+		const size_t colon = field.find(':');
+		if (colon == std::string_view::npos || !equalsIgnoreCase(field.substr(0, colon), "Content-Length"))
+			continue;
+
+		size_t bodySize = 0;
+		const std::string_view value = trim(field.substr(colon + 1));
+		if (std::from_chars(value.data(), value.data() + value.size(), bodySize).ec == std::errc{})
+			length += bodySize;
+		break;
+	}
+
+	return response.size() >= length ? std::optional(length) : std::nullopt;
+}
+
+// Reads exactly one response. Reading to EOF would instead wait out the keep-alive timeout, and
+// the caller may have pipelined a second request whose response must stay in the socket.
+std::string sReadResponse(std::invocable<std::span<char>> auto readChunk) {
+	std::string response;
+	std::array<char, 4096> chunk{};
+
+	while (!sResponseLength(response)) {
+		const ssize_t bytesRead = readChunk(std::span(chunk));
+		if (bytesRead <= 0)
+			break;
+		response.append(chunk.data(), static_cast<size_t>(bytesRead));
+	}
+
+	return response;
+}
+
+std::string sReadResponse(int fd) {
+	return sReadResponse([fd](std::span<char> buffer) { return ::recv(fd, buffer.data(), buffer.size(), 0); });
+}
+
+std::string sRoundTrip(uint16_t port, std::initializer_list<std::string_view> pieces) {
+	const ou::UniqueFd fd = sConnect(port);
+	if (!fd)
+		return {};
+
 	for (const std::string_view piece : pieces) {
 		if (::send(fd.get(), piece.data(), piece.size(), 0) < 0)
 			return {};
@@ -491,15 +554,7 @@ std::string sRoundTrip(uint16_t port, std::initializer_list<std::string_view> pi
 			std::this_thread::sleep_for(std::chrono::milliseconds(20));
 	}
 
-	std::string response;
-	std::array<char, 4096> chunk{};
-	while (true) {
-		const ssize_t bytesRead = ::recv(fd.get(), chunk.data(), chunk.size(), 0);
-		if (bytesRead <= 0)
-			break;
-		response.append(chunk.data(), static_cast<size_t>(bytesRead));
-	}
-	return response;
+	return sReadResponse(fd.get());
 }
 
 std::string sRoundTrip(uint16_t port, std::string_view rawRequest) { return sRoundTrip(port, { rawRequest }); }
@@ -538,6 +593,327 @@ BOOST_AUTO_TEST_CASE(test_server_round_trip_over_a_real_socket) {
 	server.stop();
 	server.stop();
 
+	std::filesystem::remove_all(root);
+}
+
+// --- Keep-alive ---
+
+BOOST_AUTO_TEST_CASE(test_request_reader_carries_pipelined_bytes) {
+	RequestReader reader(1024);
+
+	// Two requests in one buffer; the first must not swallow the second
+	BOOST_REQUIRE(reader.consume("GET /a HTTP/1.1\r\nHost: x\r\n\r\nGET /b HTTP/1.1\r\nHost: x\r\n\r\n") == RequestReader::Status::Complete);
+	BOOST_CHECK_EQUAL(reader.take().path, "/a");
+
+	BOOST_REQUIRE(reader.reset() == RequestReader::Status::Complete);
+	BOOST_CHECK_EQUAL(reader.take().path, "/b");
+
+	// Nothing left, so the next round has to wait for the socket
+	BOOST_CHECK(reader.reset() == RequestReader::Status::NeedMore);
+	BOOST_CHECK(reader.empty());
+}
+
+BOOST_AUTO_TEST_CASE(test_request_reader_body_does_not_absorb_next_request) {
+	RequestReader reader(1024);
+
+	BOOST_REQUIRE(reader.consume("POST /a HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\n\r\nHELLOGET /b HTTP/1.1\r\nHost: x\r\n\r\n")
+								== RequestReader::Status::Complete);
+	const Request first = reader.take();
+	BOOST_CHECK_EQUAL(first.path, "/a");
+	BOOST_CHECK_EQUAL(first.body, "HELLO");
+
+	BOOST_REQUIRE(reader.reset() == RequestReader::Status::Complete);
+	BOOST_CHECK_EQUAL(reader.take().path, "/b");
+}
+
+BOOST_AUTO_TEST_CASE(test_keep_alive_defaults_by_version) {
+	const std::optional<Request> oneOne = Request::parse("GET / HTTP/1.1\r\nHost: x\r\n\r\n");
+	BOOST_REQUIRE(oneOne.has_value());
+	BOOST_CHECK(oneOne.value().wantsKeepAlive());
+
+	const std::optional<Request> oneZero = Request::parse("GET / HTTP/1.0\r\nHost: x\r\n\r\n");
+	BOOST_REQUIRE(oneZero.has_value());
+	BOOST_CHECK(!oneZero.value().wantsKeepAlive());
+
+	const std::optional<Request> closed = Request::parse("GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+	BOOST_REQUIRE(closed.has_value());
+	BOOST_CHECK(!closed.value().wantsKeepAlive());
+
+	const std::optional<Request> revived = Request::parse("GET / HTTP/1.0\r\nHost: x\r\nConnection: keep-alive\r\n\r\n");
+	BOOST_REQUIRE(revived.has_value());
+	BOOST_CHECK(revived.value().wantsKeepAlive());
+
+	// The field is a comma-separated list, not a single token
+	const std::optional<Request> listed = Request::parse("GET / HTTP/1.1\r\nHost: x\r\nConnection: TE, Close\r\n\r\n");
+	BOOST_REQUIRE(listed.has_value());
+	BOOST_CHECK(!listed.value().wantsKeepAlive());
+}
+
+namespace {
+
+// Both concurrency models must behave identically here, so each case runs against both
+void sCheckKeepAlive(Server::Model model, uint16_t port) {
+	const std::filesystem::path root = sMakeTempDir("keepalive");
+	sWriteFile(root / "a.txt", "aaa");
+	sWriteFile(root / "b.txt", "bbbb");
+
+	Server::Config config;
+	config.servingDirectory = root;
+	config.port = port;
+	config.threadCount = 2;
+	config.model = model;
+
+	Server server(config);
+	BOOST_REQUIRE(server.start());
+
+	{ // Two requests down one connection
+		const ou::UniqueFd fd = sConnect(port);
+		BOOST_REQUIRE(fd.valid());
+
+		const std::string first = "GET /a.txt HTTP/1.1\r\nHost: x\r\n\r\n";
+		BOOST_REQUIRE(::send(fd.get(), first.data(), first.size(), 0) > 0);
+		const std::string firstResponse = sReadResponse(fd.get());
+		BOOST_CHECK(firstResponse.starts_with("HTTP/1.1 200 OK"));
+		BOOST_CHECK(firstResponse.ends_with("aaa"));
+
+		const std::string second = "GET /b.txt HTTP/1.1\r\nHost: x\r\n\r\n";
+		BOOST_REQUIRE(::send(fd.get(), second.data(), second.size(), 0) > 0);
+		const std::string secondResponse = sReadResponse(fd.get());
+		BOOST_CHECK(secondResponse.starts_with("HTTP/1.1 200 OK"));
+		BOOST_CHECK(secondResponse.ends_with("bbbb"));
+	}
+
+	{ // Pipelined: both requests arrive in one write, both get answered
+		const ou::UniqueFd fd = sConnect(port);
+		BOOST_REQUIRE(fd.valid());
+
+		const std::string both = "GET /a.txt HTTP/1.1\r\nHost: x\r\n\r\n"
+														 "GET /b.txt HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n";
+		BOOST_REQUIRE(::send(fd.get(), both.data(), both.size(), 0) > 0);
+
+		BOOST_CHECK(sReadResponse(fd.get()).ends_with("aaa"));
+		BOOST_CHECK(sReadResponse(fd.get()).ends_with("bbbb"));
+	}
+
+	{ // Connection: close is honoured, and the server really closes
+		const ou::UniqueFd fd = sConnect(port);
+		BOOST_REQUIRE(fd.valid());
+
+		const std::string request = "GET /a.txt HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n";
+		BOOST_REQUIRE(::send(fd.get(), request.data(), request.size(), 0) > 0);
+
+		const std::string response = sReadResponse(fd.get());
+		BOOST_CHECK(response.find("Connection: close") != std::string::npos);
+
+		std::array<char, 64> chunk{};
+		BOOST_CHECK_EQUAL(::recv(fd.get(), chunk.data(), chunk.size(), 0), 0);
+	}
+
+	{ // HTTP/1.0 closes unless it asks otherwise
+		const ou::UniqueFd fd = sConnect(port);
+		BOOST_REQUIRE(fd.valid());
+
+		const std::string request = "GET /a.txt HTTP/1.0\r\nHost: x\r\n\r\n";
+		BOOST_REQUIRE(::send(fd.get(), request.data(), request.size(), 0) > 0);
+		BOOST_CHECK(sReadResponse(fd.get()).find("Connection: close") != std::string::npos);
+
+		std::array<char, 64> chunk{};
+		BOOST_CHECK_EQUAL(::recv(fd.get(), chunk.data(), chunk.size(), 0), 0);
+	}
+
+	server.stop();
+	std::filesystem::remove_all(root);
+}
+
+} // namespace
+
+#ifndef DISABLE_HTTPS
+
+namespace {
+
+// A TLS client that does not verify the peer, since the demo cert is self-signed
+struct TlsClient {
+	SSL_CTX *ctx = nullptr;
+	SSL *ssl = nullptr;
+	ou::UniqueFd fd;
+
+	explicit TlsClient(uint16_t port) : ctx(SSL_CTX_new(TLS_client_method())), fd(sConnect(port)) {
+		if ((ctx == nullptr) || !fd.valid())
+			return;
+
+		ssl = SSL_new(ctx);
+		if (ssl == nullptr)
+			return;
+
+		SSL_set_fd(ssl, fd.get());
+		if (SSL_connect(ssl) != 1) {
+			SSL_free(ssl);
+			ssl = nullptr;
+		}
+	}
+
+	TlsClient(const TlsClient &) = delete;
+	TlsClient &operator=(const TlsClient &) = delete;
+	TlsClient(TlsClient &&) = delete;
+	TlsClient &operator=(TlsClient &&) = delete;
+
+	~TlsClient() {
+		if (ssl != nullptr) {
+			SSL_shutdown(ssl);
+			SSL_free(ssl);
+		}
+		SSL_CTX_free(ctx);
+	}
+
+	[[nodiscard]] bool connected() const { return ssl != nullptr; }
+
+	[[nodiscard]] bool send(std::string_view request) const { return SSL_write(ssl, request.data(), static_cast<int>(request.size())) > 0; }
+
+	[[nodiscard]] std::string receive() const {
+		return sReadResponse([this](std::span<char> buffer) { return SSL_read(ssl, buffer.data(), static_cast<int>(buffer.size())); });
+	}
+};
+
+void sCheckConcurrentTlsSessions(uint16_t port) {
+	std::vector<std::unique_ptr<TlsClient>> clients;
+	clients.reserve(8);
+	for (int i = 0; i < 8; ++i) {
+		clients.push_back(std::make_unique<TlsClient>(port));
+	}
+
+	for (const auto &client : clients) {
+		BOOST_REQUIRE(client->connected());
+		BOOST_REQUIRE(client->send("GET /a.txt HTTP/1.1\r\nHost: x\r\n\r\n"));
+	}
+	for (const auto &client : clients) {
+		BOOST_CHECK(client->receive().ends_with("over tls"));
+	}
+}
+
+// The event-loop handshake is resumable across wakeups, which nothing else exercises
+void sCheckTls(Server::Model model, uint16_t port) {
+	const std::filesystem::path root = sMakeTempDir("tls");
+	sWriteFile(root / "a.txt", "over tls");
+
+	Server::Config config;
+	config.servingDirectory = root;
+	config.port = port;
+	config.threadCount = 2;
+	config.model = model;
+	config.https = { .enabled = true,
+									 .certPath = std::filesystem::path(TEST_CERT_DIR) / "cert.pem",
+									 .keyPath = std::filesystem::path(TEST_CERT_DIR) / "key.pem" };
+
+	Server server(config);
+	BOOST_REQUIRE(server.start());
+
+	{ // Handshake, then a request
+		TlsClient client(port);
+		BOOST_REQUIRE(client.connected());
+		BOOST_REQUIRE(client.send("GET /a.txt HTTP/1.1\r\nHost: x\r\n\r\n"));
+
+		const std::string response = client.receive();
+		BOOST_CHECK(response.starts_with("HTTP/1.1 200 OK"));
+		BOOST_CHECK(response.ends_with("over tls"));
+	}
+
+	{ // Keep-alive over TLS: two requests on one session
+		TlsClient client(port);
+		BOOST_REQUIRE(client.connected());
+
+		BOOST_REQUIRE(client.send("GET /a.txt HTTP/1.1\r\nHost: x\r\n\r\n"));
+		BOOST_CHECK(client.receive().ends_with("over tls"));
+
+		BOOST_REQUIRE(client.send("GET /nope HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"));
+		BOOST_CHECK(client.receive().starts_with("HTTP/1.1 404"));
+	}
+
+	// Thread-per-core cannot do this by construction: its 2 workers hold 2 keep-alive connections
+	// open, so a third client's handshake has nobody to accept it until one times out.
+	if (model == Server::Model::EventLoop)
+		sCheckConcurrentTlsSessions(port);
+
+	server.stop();
+	std::filesystem::remove_all(root);
+}
+
+} // namespace
+
+BOOST_AUTO_TEST_CASE(test_tls_thread_per_core) { sCheckTls(Server::Model::ThreadPerCore, 18180); }
+
+BOOST_AUTO_TEST_CASE(test_tls_event_loop) { sCheckTls(Server::Model::EventLoop, 18181); }
+
+#endif // DISABLE_HTTPS
+
+namespace {
+
+// A request that never parses returns before any Request exists, so it used to leave no trace
+void sCheckRejectionIsLogged(Server::Model model, uint16_t port) {
+	const std::filesystem::path root = sMakeTempDir("rejectlog");
+	const std::filesystem::path logPath = sMakeTempLogPath("rejected");
+	std::filesystem::remove(logPath);
+
+	Server::Config config;
+	config.servingDirectory = root;
+	config.port = port;
+	config.threadCount = 1;
+	config.model = model;
+
+	Server server(config);
+	server.addMiddleware(std::make_shared<AccessLog>(AccessLog::Config{ .path = logPath, .flushBytes = 0 }));
+	BOOST_REQUIRE(server.start());
+
+	const std::string response = sRoundTrip(port, "BOGUS / HTTP/1.1\r\nHost: x\r\n\r\n");
+	BOOST_CHECK(response.starts_with("HTTP/1.1 400"));
+
+	server.stop();
+
+	BOOST_REQUIRE(std::filesystem::exists(logPath));
+	std::ifstream logFile(logPath);
+	std::string entry;
+	std::getline(logFile, entry);
+
+	BOOST_CHECK(entry.find(" 400 ") != std::string::npos);
+	BOOST_CHECK(entry.find("\"-\"") != std::string::npos);
+
+	std::filesystem::remove(logPath);
+	std::filesystem::remove_all(root);
+}
+
+} // namespace
+
+BOOST_AUTO_TEST_CASE(test_rejection_is_logged_thread_per_core) { sCheckRejectionIsLogged(Server::Model::ThreadPerCore, 18182); }
+
+BOOST_AUTO_TEST_CASE(test_rejection_is_logged_event_loop) { sCheckRejectionIsLogged(Server::Model::EventLoop, 18183); }
+
+BOOST_AUTO_TEST_CASE(test_keep_alive_thread_per_core) { sCheckKeepAlive(Server::Model::ThreadPerCore, 18176); }
+
+BOOST_AUTO_TEST_CASE(test_keep_alive_event_loop) { sCheckKeepAlive(Server::Model::EventLoop, 18177); }
+
+BOOST_AUTO_TEST_CASE(test_keep_alive_can_be_disabled) {
+	const std::filesystem::path root = sMakeTempDir("keepalive-off");
+	sWriteFile(root / "a.txt", "aaa");
+
+	Server::Config config;
+	config.servingDirectory = root;
+	config.port = 18178;
+	config.threadCount = 1;
+	config.keepAlive = false;
+
+	Server server(config);
+	BOOST_REQUIRE(server.start());
+
+	const ou::UniqueFd fd = sConnect(config.port);
+	BOOST_REQUIRE(fd.valid());
+
+	const std::string request = "GET /a.txt HTTP/1.1\r\nHost: x\r\n\r\n";
+	BOOST_REQUIRE(::send(fd.get(), request.data(), request.size(), 0) > 0);
+	BOOST_CHECK(sReadResponse(fd.get()).find("Connection: close") != std::string::npos);
+
+	std::array<char, 64> chunk{};
+	BOOST_CHECK_EQUAL(::recv(fd.get(), chunk.data(), chunk.size(), 0), 0);
+
+	server.stop();
 	std::filesystem::remove_all(root);
 }
 
@@ -618,7 +994,7 @@ BOOST_AUTO_TEST_CASE(test_access_log_middleware) {
 	const std::filesystem::path logPath = sMakeTempLogPath("access");
 	std::filesystem::remove(logPath);
 
-	AccessLog accessLog(AccessLog::Config{ .path = logPath });
+	AccessLog accessLog(AccessLog::Config{ .path = logPath, .flushBytes = 0 });
 
 	Request request = sMakeLoggedRequest("/logged");
 	Response response = Response::plainText(200, "hello");
@@ -647,11 +1023,71 @@ BOOST_AUTO_TEST_CASE(test_access_log_middleware) {
 	std::filesystem::remove(logPath);
 }
 
+BOOST_AUTO_TEST_CASE(test_access_log_buffers_until_flushed) {
+	const std::filesystem::path logPath = sMakeTempLogPath("buffered");
+	std::filesystem::remove(logPath);
+
+	const Response response = Response::plainText(200, "hello");
+
+	{
+		// Large enough that nothing reaches the file on its own, and an interval long enough that
+		// the time-based flush cannot fire during the test
+		AccessLog accessLog(AccessLog::Config{ .path = logPath, .flushBytes = size_t{ 64 } * 1024, .flushInterval = std::chrono::hours(1) });
+
+		for (int i = 0; i < 10; ++i) {
+			Request request = sMakeLoggedRequest("/buffered");
+			accessLog.postProcess(request, response);
+		}
+
+		BOOST_CHECK(!std::filesystem::exists(logPath));
+
+		accessLog.flush();
+		BOOST_CHECK_EQUAL(sCountLines(logPath), 10U);
+
+		// Rotation still works while buffering, because each flush reopens by path
+		std::filesystem::remove(logPath);
+		Request request = sMakeLoggedRequest("/buffered");
+		accessLog.postProcess(request, response);
+		accessLog.flush();
+		BOOST_REQUIRE(std::filesystem::exists(logPath));
+		BOOST_CHECK_EQUAL(sCountLines(logPath), 1U);
+
+		std::filesystem::remove(logPath);
+
+		// Must survive destruction rather than being dropped
+		Request last = sMakeLoggedRequest("/at-exit");
+		accessLog.postProcess(last, response);
+		BOOST_CHECK(!std::filesystem::exists(logPath));
+	}
+
+	BOOST_REQUIRE(std::filesystem::exists(logPath));
+	BOOST_CHECK_EQUAL(sCountLines(logPath), 1U);
+
+	std::filesystem::remove(logPath);
+}
+
+BOOST_AUTO_TEST_CASE(test_access_log_flushes_when_buffer_fills) {
+	const std::filesystem::path logPath = sMakeTempLogPath("bufferfull");
+	std::filesystem::remove(logPath);
+
+	// One entry is well over 16 bytes, so every entry trips the size bound
+	AccessLog accessLog(AccessLog::Config{ .path = logPath, .flushBytes = 16, .flushInterval = std::chrono::hours(1) });
+	const Response response = Response::plainText(200, "hello");
+
+	for (int i = 0; i < 3; ++i) {
+		Request request = sMakeLoggedRequest("/full");
+		accessLog.postProcess(request, response);
+	}
+
+	BOOST_CHECK_EQUAL(sCountLines(logPath), 3U);
+	std::filesystem::remove(logPath);
+}
+
 BOOST_AUTO_TEST_CASE(test_access_log_recreates_after_rotation) {
 	const std::filesystem::path logPath = sMakeTempLogPath("rotation");
 	std::filesystem::remove(logPath);
 
-	AccessLog accessLog(AccessLog::Config{ .path = logPath });
+	AccessLog accessLog(AccessLog::Config{ .path = logPath, .flushBytes = 0 });
 	Request request = sMakeLoggedRequest("/rotated");
 	Response response = Response::plainText(200, "hello");
 
@@ -672,7 +1108,7 @@ BOOST_AUTO_TEST_CASE(test_access_log_concurrent_writes) {
 	const std::filesystem::path logPath = sMakeTempLogPath("concurrent");
 	std::filesystem::remove(logPath);
 
-	AccessLog accessLog(AccessLog::Config{ .path = logPath });
+	AccessLog accessLog(AccessLog::Config{ .path = logPath, .flushBytes = 0 });
 	Response response = Response::plainText(200, "hello");
 
 	constexpr int threadCount = 4;
@@ -706,7 +1142,7 @@ BOOST_AUTO_TEST_CASE(test_access_log_records_routed_status) {
 	config.threadCount = 1;
 	TestServer server(config);
 
-	server.addMiddleware(std::make_shared<AccessLog>(AccessLog::Config{ .path = logPath }));
+	server.addMiddleware(std::make_shared<AccessLog>(AccessLog::Config{ .path = logPath, .flushBytes = 0 }));
 	server.registerPathHandler({ Method::GET, Method::HEAD }, "/hello", [](const Request &) { return Response::plainText(200, "hi there"); });
 
 	Request routed = sMakeLoggedRequest("/hello");

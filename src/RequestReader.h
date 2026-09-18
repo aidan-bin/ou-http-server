@@ -29,8 +29,13 @@ public:
 	// Only valid after Complete
 	[[nodiscard]] Request take();
 
+	// Drops the finished request and reports on whatever followed it
+	Status reset();
+
 private:
 	Status reject(int status) noexcept;
+
+	Status parseBuffered();
 
 	size_t maxRequestBytes_;
 	std::string raw_;

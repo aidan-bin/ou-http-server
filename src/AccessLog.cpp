@@ -22,22 +22,42 @@ namespace {
 	}
 
 	std::string sFormatLogEntry(const Request &request, const Response &response, const sockaddr_in &clientAddr) {
-		return std::format("[{}] {} - \"{} {}\" {} {}\n", sGetTimestamp(), addressToString(clientAddr), request.method, request.path,
-											 response.statusCode, response.body.size());
+		const std::string requestLine = request.path.empty() ? "-" : std::format("{} {}", request.method, request.path);
+
+		return std::format("[{}] {} - \"{}\" {} {}\n", sGetTimestamp(), addressToString(clientAddr), requestLine, response.statusCode,
+											 response.body.size());
 	}
 } // namespace
 
 AccessLog::AccessLog(Config config) : config_(std::move(config)) {}
 
+AccessLog::~AccessLog() { flush(); }
+
 void AccessLog::log(const Request &request, const Response &response, const sockaddr_in &clientAddr) {
 	const std::lock_guard<std::mutex> lock(mutex_);
 
-	// Opened per entry so an externally rotated log is recreated
-	std::ofstream logFile(config_.path, std::ios::app);
-	if (!logFile)
+	pending_ += sFormatLogEntry(request, response, clientAddr);
+
+	if (pending_.size() >= config_.flushBytes || std::chrono::steady_clock::now() - lastFlush_ >= config_.flushInterval)
+		flushLocked();
+}
+
+void AccessLog::flush() {
+	const std::lock_guard<std::mutex> lock(mutex_);
+	flushLocked();
+}
+
+void AccessLog::flushLocked() {
+	lastFlush_ = std::chrono::steady_clock::now();
+	if (pending_.empty())
 		return;
 
-	logFile << sFormatLogEntry(request, response, clientAddr);
+	std::ofstream logFile(config_.path, std::ios::app);
+
+	if (logFile)
+		logFile << pending_;
+
+	pending_.clear();
 }
 
 void AccessLog::postProcess(const Request &request, const Response &response) {

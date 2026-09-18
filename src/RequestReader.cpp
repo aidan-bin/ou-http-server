@@ -1,5 +1,6 @@
 #include "RequestReader.h"
 
+#include <algorithm>
 #include <utility>
 
 namespace ou::http {
@@ -11,6 +12,23 @@ RequestReader::Status RequestReader::reject(int status) noexcept {
 
 RequestReader::Status RequestReader::consume(std::string_view bytes) {
 	raw_.append(bytes);
+	return parseBuffered();
+}
+
+RequestReader::Status RequestReader::reset() {
+	// Anything past the finished request is the start of the next one
+	raw_.erase(0, std::min(totalSize_, raw_.size()));
+	headerEnd_ = std::string::npos;
+	totalSize_ = 0;
+	request_.reset();
+
+	return parseBuffered();
+}
+
+RequestReader::Status RequestReader::parseBuffered() {
+	if (raw_.empty())
+		return Status::NeedMore;
+
 	if (raw_.size() > maxRequestBytes_)
 		return reject(413);
 

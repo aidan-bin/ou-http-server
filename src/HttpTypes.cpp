@@ -28,6 +28,12 @@ namespace {
 	}
 	// NOLINTEND(cppcoreguidelines-pro-bounds-pointer-arithmetic,bugprone-suspicious-stringview-data-usage)
 
+	bool sHasToken(std::string_view fieldValue, std::string_view token) {
+		const auto listed = [token](const auto &part) {
+			return equalsIgnoreCase(trim(std::string_view(part.begin(), part.end())), token);
+		};
+		return std::ranges::any_of(std::views::split(fieldValue, ','), listed);
+	}
 } // namespace
 
 std::ostream &operator<<(std::ostream &os, Method method) {
@@ -118,7 +124,7 @@ std::pair<std::string_view, std::string_view> Request::split_at(std::string_view
 	return { str.substr(0, pos), str.substr(pos + 1) };
 }
 
-std::string_view Request::trim(std::string_view str) {
+std::string_view trim(std::string_view str) {
 	constexpr std::string_view kWhitespace = " \t\n\v\f\r";
 	const size_t first = str.find_first_not_of(kWhitespace);
 	if (first == std::string_view::npos)
@@ -150,6 +156,7 @@ std::optional<Request> Request::parse(std::string_view raw) {
 
 	Request request;
 	request.method = *method;
+	request.http10 = httpVersion == "HTTP/1.0";
 
 	const size_t queryStart = target.find('?');
 	request.path = percentDecode(target.substr(0, queryStart), false);
@@ -197,16 +204,26 @@ std::optional<size_t> Request::contentLength() const {
 	return sParseNumber<size_t>(trim(*value));
 }
 
+bool Request::wantsKeepAlive() const {
+	const std::optional<std::string_view> connection = header("Connection");
+
+	if (http10)
+		return connection && sHasToken(*connection, "keep-alive");
+
+	return !connection || !sHasToken(*connection, "close");
+}
+
 std::string Response::serialize() const {
 	const std::string_view reason = reasonPhrase.empty() ? defaultReasonPhrase(statusCode) : std::string_view(reasonPhrase);
 
-	std::string serialized = std::format("HTTP/1.1 {} {}\r\nContent-Length: {}\r\n", statusCode, reason, body.size());
+	std::string serialized = std::format("HTTP/1.1 {} {}\r\nContent-Length: {}\r\nConnection: {}\r\n", statusCode, reason, body.size(),
+																			 keepAlive ? "keep-alive" : "close");
 
 	if (!headers.contains("Content-Type"))
 		serialized += "Content-Type: text/html\r\n";
 
 	for (const auto &[name, value] : headers) {
-		if (equalsIgnoreCase(name, "Content-Length"))
+		if (equalsIgnoreCase(name, "Content-Length") || equalsIgnoreCase(name, "Connection"))
 			continue;
 		serialized += std::format("{}: {}\r\n", name, value);
 	}

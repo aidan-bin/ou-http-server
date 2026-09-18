@@ -23,7 +23,8 @@ namespace ou::http {
 // One per worker thread; owns each connection
 class EventLoop {
 public:
-	using Dispatch = std::function<Response(Request)>;
+	using Dispatch = std::function<Response(Request, const sockaddr_in &clientAddr)>;
+	using Reject = std::function<Response(int status, const sockaddr_in &clientAddr)>;
 
 	struct Config {
 		int listenSocket = -1; // Borrowed from Server
@@ -31,7 +32,7 @@ public:
 		std::chrono::seconds idleTimeout{ 10 };
 	};
 
-	EventLoop(Config config, SocketHandler &socketHandler, Dispatch dispatch);
+	EventLoop(Config config, SocketHandler &socketHandler, Dispatch dispatch, Reject reject);
 
 	// Returns within one poll timeout of running going false
 	void run(const std::atomic<bool> &running);
@@ -51,6 +52,7 @@ private:
 		Interest interest = Interest::Read;
 		std::string outBuffer;
 		size_t written = 0;
+		bool keepAlive = false;
 	};
 
 	using ConnectionMap = std::unordered_map<int, Connection>;
@@ -61,17 +63,20 @@ private:
 	[[nodiscard]] bool service(Connection &connection);
 	[[nodiscard]] bool readFrom(Connection &connection);
 	[[nodiscard]] bool writeTo(Connection &connection);
+	[[nodiscard]] bool handleReaderStatus(Connection &connection, RequestReader::Status status);
 	[[nodiscard]] bool respond(Connection &connection, const Response &response);
 	[[nodiscard]] bool arm(Connection &connection, Interest interest);
 
 	void serviceOrClose(ConnectionMap::iterator connection);
 
-	void close(ConnectionMap::iterator connection);
+	// Returns the following connection for iteration
+	ConnectionMap::iterator close(ConnectionMap::iterator connection);
 	void sweepIdle();
 
 	Config config_;
 	SocketHandler &socketHandler_;
 	Dispatch dispatch_;
+	Reject reject_;
 
 	Poller poller_;
 	ConnectionMap connections_;

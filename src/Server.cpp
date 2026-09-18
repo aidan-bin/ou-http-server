@@ -140,7 +140,14 @@ int sAcceptOne(int serverSocket, sockaddr_in &clientAddr) {
 
 namespace ou::http {
 
-Server::Server(Config config) : config_(std::move(config)) {}
+Server::Server(Config config) : config_(std::move(config)) {
+	std::error_code ec;
+	servingRoot_ = std::filesystem::weakly_canonical(config_.servingDirectory, ec);
+	if (ec) {
+		LOG_ERROR("Cannot resolve serving directory: {}", config_.servingDirectory.string());
+		servingRoot_.clear();
+	}
+}
 
 Server::~Server() { stop(); }
 
@@ -249,26 +256,26 @@ void Server::registerPatternHandler(std::initializer_list<Method> methods, const
 	}
 }
 
-std::variant<Request, int> Server::readRequest(int clientSocket) const {
-	RequestReader reader(config_.maxRequestBytes);
+std::variant<Request, int> Server::readRequest(int clientSocket, RequestReader &reader) const {
 	std::array<char, RequestReader::kChunkBytes> chunk{};
 
-	while (true) {
+	RequestReader::Status status = reader.reset();
+
+	while (status == RequestReader::Status::NeedMore) {
 		const IoResult result = socketHandler_->read(clientSocket, chunk);
 		if (result.status != IoStatus::Ok) {
-			// Timed out, or the peer went away before finishing
+			// Timed out or the peer went away; an idle keep-alive connection lands here with nothing
+			// buffered and is closed without an answer
 			return reader.empty() ? 0 : 408;
 		}
 
-		switch (reader.consume({ chunk.data(), result.bytes })) {
-		case RequestReader::Status::NeedMore:
-			break;
-		case RequestReader::Status::Complete:
-			return reader.take();
-		case RequestReader::Status::Rejected:
-			return reader.rejectStatus();
-		}
+		status = reader.consume({ chunk.data(), result.bytes });
 	}
+
+	if (status == RequestReader::Status::Rejected)
+		return reader.rejectStatus();
+
+	return reader.take();
 }
 
 void Server::handleConnection(int clientSocket, const sockaddr_in &clientAddr) const {
@@ -279,24 +286,23 @@ void Server::handleConnection(int clientSocket, const sockaddr_in &clientAddr) c
 	if (socketHandler_->acceptConnection(clientSocket).status != IoStatus::Ok)
 		return;
 
-	std::variant<Request, int> result = readRequest(clientSocket);
+	RequestReader reader(config_.maxRequestBytes);
 
-	if (const int *status = std::get_if<int>(&result)) {
-		if (*status == 0)
+	while (running_.load()) {
+		std::variant<Request, int> result = readRequest(clientSocket, reader);
+
+		if (const int *status = std::get_if<int>(&result)) {
+			if (*status != 0)
+				(void)socketHandler_->writeAll(clientSocket, rejectRequest(*status, clientAddr).serialize());
+
 			return;
+		}
 
-		LOG_WARN("Rejecting request from {} with status {}", addressToString(clientAddr), *status);
-		(void)socketHandler_->writeAll(clientSocket, Response::error(*status).serialize());
-		return;
+		const Response response = serve(std::move(std::get<Request>(result)), clientAddr);
+
+		if (socketHandler_->writeAll(clientSocket, response.serialize()).status != IoStatus::Ok || !response.keepAlive)
+			return;
 	}
-
-	Request request = std::move(std::get<Request>(result));
-	request.clientAddr = clientAddr;
-
-	const std::string requestLine = std::format("{} {}", request.method, request.path);
-	const Response response = handleRequest(std::move(request));
-	LOG_INFO("{} from {} -> {}", requestLine, addressToString(clientAddr), response.statusCode);
-	(void)socketHandler_->writeAll(clientSocket, response.serialize());
 }
 
 void Server::workerThread(int serverSocket) {
@@ -325,7 +331,9 @@ void Server::eventLoopThread(int serverSocket) {
 																	.idleTimeout = config_.readTimeout };
 
 	// Pass control to event loop logic; delegates request handling to Server
-	EventLoop loop(config, *socketHandler_, [this](Request request) { return handleRequest(std::move(request)); });
+	EventLoop loop(
+			config, *socketHandler_, [this](Request request, const sockaddr_in &clientAddr) { return serve(std::move(request), clientAddr); },
+			[this](int status, const sockaddr_in &clientAddr) { return rejectRequest(status, clientAddr); });
 	loop.run(running_);
 }
 
@@ -362,22 +370,45 @@ Response Server::handleRequest(Request request) const {
 	return response;
 }
 
+Response Server::serve(Request request, const sockaddr_in &clientAddr) const {
+	request.clientAddr = clientAddr;
+	const bool keepAlive = config_.keepAlive && request.wantsKeepAlive();
+
+	const std::string requestLine = std::format("{} {}", request.method, request.path);
+	Response response = handleRequest(std::move(request));
+	response.keepAlive = keepAlive;
+
+	LOG_INFO("{} from {} -> {}", requestLine, addressToString(clientAddr), response.statusCode);
+	return response;
+}
+
+Response Server::rejectRequest(int status, const sockaddr_in &clientAddr) const {
+	LOG_WARN("Rejecting request from {} with status {}", addressToString(clientAddr), status);
+
+	Request request;
+	request.clientAddr = clientAddr;
+
+	Response response = Response::error(status);
+	for (const auto &middleware : middlewares_) {
+		middleware->postProcess(request, response);
+	}
+
+	return response;
+}
+
 Response Server::handleStaticFileRequest(const Request &request) const {
 	if (!request.path.starts_with('/'))
 		return Response::error(400);
 
-	std::error_code ec;
-	const std::filesystem::path root = std::filesystem::weakly_canonical(config_.servingDirectory, ec);
-	if (ec) {
-		LOG_ERROR("Cannot resolve serving directory: {}", config_.servingDirectory.string());
+	if (servingRoot_.empty())
 		return Response::error(500);
-	}
 
-	const std::filesystem::path target = std::filesystem::weakly_canonical(root / std::string_view(request.path).substr(1), ec);
+	std::error_code ec;
+	const std::filesystem::path target = std::filesystem::weakly_canonical(servingRoot_ / std::string_view(request.path).substr(1), ec);
 	if (ec)
 		return Response::error(404);
 
-	if (!sIsWithin(target, root)) {
+	if (!sIsWithin(target, servingRoot_)) {
 		LOG_WARN("Rejected path outside serving directory: {}", request.path);
 		return Response::error(403);
 	}

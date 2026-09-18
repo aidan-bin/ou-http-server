@@ -23,6 +23,8 @@
 
 namespace ou::http {
 
+class RequestReader;
+
 class Middleware {
 public:
 	Middleware() = default;
@@ -58,6 +60,8 @@ public:
 		// Stops a stalled connection from holding a worker thread
 		std::chrono::seconds readTimeout{ 10 };
 
+		bool keepAlive = true;
+
 #ifndef DISABLE_HTTPS
 		SSLSocketHandler::Config https;
 #endif
@@ -85,6 +89,9 @@ protected:
 	[[nodiscard]] Response handleRequest(Request request) const;
 	[[nodiscard]] Response handleStaticFileRequest(const Request &request) const;
 
+	// Logs and runs middleware postProcess on a request that never parsed
+	[[nodiscard]] Response rejectRequest(int status, const sockaddr_in &clientAddr) const;
+
 private:
 	struct PatternRoute {
 		Method method;
@@ -95,12 +102,15 @@ private:
 	void workerThread(int serverSocket);
 	void eventLoopThread(int serverSocket);
 
+	[[nodiscard]] Response serve(Request request, const sockaddr_in &clientAddr) const;
+
 	// Model::ThreadPerCore logic
 	void handleConnection(int clientSocket, const sockaddr_in &clientAddr) const; // Never throws, and never closes the socket
-	[[nodiscard]] std::variant<Request, int>
-	readRequest(int clientSocket) const; // Reads one complete request, or the status to answer with instead (0 = close silently)
+	// Reads the next complete request, or the status to answer with instead (0 = close silently)
+	[[nodiscard]] std::variant<Request, int> readRequest(int clientSocket, RequestReader &reader) const;
 
 	Config config_;
+	std::filesystem::path servingRoot_;
 	std::atomic<bool> running_{ false };
 	std::vector<std::thread> threads_;
 	UniqueFd listenSocket_; // Shared by every worker thread

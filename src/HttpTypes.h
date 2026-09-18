@@ -55,6 +55,8 @@ using Headers = std::map<std::string, std::string, CaseInsensitiveLess>;
 
 [[nodiscard]] bool equalsIgnoreCase(std::string_view lhs, std::string_view rhs) noexcept;
 
+[[nodiscard]] std::string_view trim(std::string_view str);
+
 // Decodes %XX escapes; invalid escapes are left verbatim. '+' means space only in query/form data
 [[nodiscard]] std::string percentDecode(std::string_view input, bool plusAsSpace = true);
 
@@ -98,6 +100,7 @@ using Headers = std::map<std::string, std::string, CaseInsensitiveLess>;
 
 struct Request {
 	Method method{ Method::GET };
+	bool http10 = false;
 	std::string path;	 // Decoded
 	std::string query; // Raw, must be percent-decoded
 	Headers headers;
@@ -109,9 +112,11 @@ struct Request {
 	[[nodiscard]] std::optional<std::string_view> header(std::string_view name) const;
 	[[nodiscard]] std::optional<size_t> contentLength() const;
 
+	// HTTP/1.1 keeps the connection open unless asked not to
+	[[nodiscard]] bool wantsKeepAlive() const;
+
 private:
 	static std::pair<std::string_view, std::string_view> split_at(std::string_view str, char delimiter);
-	static std::string_view trim(std::string_view str);
 };
 
 struct Response {
@@ -119,6 +124,7 @@ struct Response {
 	std::string reasonPhrase; // Derived from statusCode if empty
 	Headers headers;
 	std::string body;
+	bool keepAlive = false; // Emitted as the Connection header
 
 	[[nodiscard]] std::string serialize() const;
 

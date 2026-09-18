@@ -1,7 +1,6 @@
 #include "EventLoop.h"
 #include "Logging.h"
 
-#include <format>
 #include <utility>
 
 #include <sys/socket.h>
@@ -14,8 +13,8 @@ constexpr auto kPollTimeout = std::chrono::milliseconds(100);
 
 namespace ou::http {
 
-EventLoop::EventLoop(Config config, SocketHandler &socketHandler, Dispatch dispatch)
-		: config_(config), socketHandler_(socketHandler), dispatch_(std::move(dispatch)) {}
+EventLoop::EventLoop(Config config, SocketHandler &socketHandler, Dispatch dispatch, Reject reject)
+		: config_(config), socketHandler_(socketHandler), dispatch_(std::move(dispatch)), reject_(std::move(reject)) {}
 
 void EventLoop::run(const std::atomic<bool> &running) {
 	if (!poller_.valid()) {
@@ -116,32 +115,30 @@ bool EventLoop::readFrom(Connection &connection) {
 	if (result.status != IoStatus::Ok)
 		return false;
 
-	switch (connection.reader.consume({ scratch_.data(), result.bytes })) {
+	return handleReaderStatus(connection, connection.reader.consume({ scratch_.data(), result.bytes }));
+}
+
+bool EventLoop::handleReaderStatus(Connection &connection, RequestReader::Status status) {
+	switch (status) {
 	case RequestReader::Status::NeedMore:
+		connection.state = State::Reading;
 		return arm(connection, Interest::Read);
 
 	case RequestReader::Status::Rejected:
-		LOG_WARN("Rejecting request from {} with status {}", addressToString(connection.address), connection.reader.rejectStatus());
-		return respond(connection, Response::error(connection.reader.rejectStatus()));
+		return respond(connection, reject_(connection.reader.rejectStatus(), connection.address));
 
 	case RequestReader::Status::Complete:
 		break;
 	}
 
-	Request request = connection.reader.take();
-	request.clientAddr = connection.address;
-
-	const std::string requestLine = std::format("{} {}", request.method, request.path);
-	const Response response = dispatch_(std::move(request));
-	LOG_INFO("{} from {} -> {}", requestLine, addressToString(connection.address), response.statusCode);
-
-	return respond(connection, response);
+	return respond(connection, dispatch_(connection.reader.take(), connection.address));
 }
 
 bool EventLoop::respond(Connection &connection, const Response &response) {
 	connection.outBuffer = response.serialize();
 	connection.written = 0;
 	connection.state = State::Writing;
+	connection.keepAlive = response.keepAlive;
 
 	// Try immediately: the send buffer is almost always empty, which saves a wakeup per request
 	return writeTo(connection);
@@ -162,8 +159,14 @@ bool EventLoop::writeTo(Connection &connection) {
 			return false;
 	}
 
-	// One request per connection, so a fully written response is the end of it
-	return false;
+	if (!connection.keepAlive)
+		return false;
+
+	connection.outBuffer.clear();
+	connection.written = 0;
+	connection.state = State::Reading;
+
+	return handleReaderStatus(connection, connection.reader.reset());
 }
 
 bool EventLoop::arm(Connection &connection, Interest interest) {
@@ -178,14 +181,14 @@ bool EventLoop::arm(Connection &connection, Interest interest) {
 	return true;
 }
 
-void EventLoop::close(ConnectionMap::iterator connection) {
+EventLoop::ConnectionMap::iterator EventLoop::close(ConnectionMap::iterator connection) {
 	const int clientSocket = connection->second.fd.get();
 
 	(void)poller_.remove(clientSocket);
 	(void)connection->second.fd.release(); // The handler closes it and frees any TLS session
 	socketHandler_.closeConnection(clientSocket);
 
-	connections_.erase(connection);
+	return connections_.erase(connection);
 }
 
 void EventLoop::sweepIdle() {
@@ -199,7 +202,7 @@ void EventLoop::sweepIdle() {
 		}
 
 		LOG_WARN("Closing idle connection from {}", addressToString(connection->second.address));
-		close(connection++);
+		connection = close(connection);
 	}
 }
 
