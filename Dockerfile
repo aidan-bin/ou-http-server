@@ -9,7 +9,16 @@ RUN apt-get update && apt-get install -y \
 	libboost-test-dev \
 	python3 \
 	python3-pip \
+	wrk \
+	linux-tools-generic \
+	git \
+	ca-certificates \
 	&& rm -rf /var/lib/apt/lists/*
+
+RUN git clone --depth 1 https://github.com/brendangregg/FlameGraph /opt/FlameGraph
+ENV PATH="/opt/FlameGraph:${PATH}"
+
+RUN ln -sf "$(ls -d /usr/lib/linux-tools/*/perf | head -1)" /usr/local/bin/perf
 
 WORKDIR /app
 

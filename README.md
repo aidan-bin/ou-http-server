@@ -82,6 +82,20 @@ docker exec -it toy_http_server bash
 docker-compose down
 ```
 
+## Benchmarking
+
+`./server.py bench` A/Bs the two concurrency models (thread-per-core vs event loop) under [`wrk`](https://github.com/wg/wrk) with keep-alive, reporting median req/s, p50 and p99.
+
+```
+brew install wrk flamegraph                    # if not using Docker 
+
+./server.py bench                              # native
+./server.py bench --docker                     # Linux / epoll (run docker-build first)
+./server.py bench -c 100 -t 16 -r 5            # connections, wrk threads, repeats (respectively)
+./server.py bench -- -H 'Connection: close'    # anything after `--` goes to wrk
+./server.py bench --flame [--docker]           # one profiled run per model -> build/bench-<os>/flame-*.svg
+```
+
 ## HTTPS
 
 A self-signed certificate and key are provided in the `example` directory.
