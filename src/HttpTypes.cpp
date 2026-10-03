@@ -182,7 +182,11 @@ std::optional<Request> Request::parse(std::string_view raw) {
 		if (name.back() == ' ' || name.back() == '\t')
 			return std::nullopt;
 
-		request.headers[std::string(name)] = std::string(trim(line.substr(colon + 1)));
+		const std::string_view value = trim(line.substr(colon + 1));
+		const auto it = request.headers.find(name);
+		if (it != request.headers.end() && equalsIgnoreCase(name, "Content-Length") && it->second != value)
+			return std::nullopt;
+		request.headers[std::string(name)] = value;
 	}
 
 	request.body = std::string(bodySection);

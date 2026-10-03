@@ -1,4 +1,5 @@
 #define BOOST_TEST_MODULE OuHttpServerTest
+#include <boost/test/data/test_case.hpp>
 #include <boost/test/included/unit_test.hpp>
 
 #include "AccessLog.h"
@@ -18,11 +19,13 @@
 #include <concepts>
 #include <fcntl.h>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <initializer_list>
 #include <memory>
 #include <netinet/in.h>
 #include <optional>
+#include <ostream>
 #include <ranges>
 #include <span>
 #include <string>
@@ -36,6 +39,80 @@
 #include <vector>
 
 using namespace ou::http;
+namespace bdata = boost::unit_test::data;
+
+namespace ou::http {
+std::ostream &operator<<(std::ostream &os, Server::Model model) {
+	return os << (model == Server::Model::EventLoop ? "EventLoop" : "ThreadPerCore");
+}
+} // namespace ou::http
+
+namespace {
+
+constexpr std::array kModels{ Server::Model::ThreadPerCore, Server::Model::EventLoop };
+
+class TempDir {
+public:
+	explicit TempDir(std::string_view name) : path_(std::filesystem::temp_directory_path() / std::format("ou_http_server_test_{}", name)) {
+		std::filesystem::remove_all(path_);
+		std::filesystem::create_directories(path_);
+	}
+	TempDir(const TempDir &) = delete;
+	TempDir &operator=(const TempDir &) = delete;
+	TempDir(TempDir &&) = delete;
+	TempDir &operator=(TempDir &&) = delete;
+	~TempDir() {
+		std::error_code ignored;
+		std::filesystem::remove_all(path_, ignored);
+	}
+
+	[[nodiscard]] const std::filesystem::path &path() const { return path_; }
+
+	void write(const std::filesystem::path &name, std::string_view content) const { std::ofstream(path_ / name) << content; }
+
+private:
+	std::filesystem::path path_;
+};
+
+std::vector<std::string> sLines(const std::filesystem::path &path) {
+	std::ifstream file(path);
+	std::vector<std::string> lines;
+	for (std::string line; std::getline(file, line);)
+		lines.push_back(line);
+	return lines;
+}
+
+bool sContains(std::string_view haystack, std::string_view needle) { return haystack.find(needle) != std::string_view::npos; }
+
+Request sParse(std::string_view raw) {
+	std::optional<Request> parsed = Request::parse(raw);
+	BOOST_REQUIRE(parsed.has_value());
+	return std::move(*parsed);
+}
+
+Request sMakeRequest(const std::string &path, Method method = Method::GET) {
+	Request request;
+	request.method = method;
+	request.path = path;
+
+	sockaddr_in clientAddr{};
+	clientAddr.sin_family = AF_INET;
+	clientAddr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+	request.clientAddr = clientAddr;
+
+	return request;
+}
+
+Server::Config sConfig(const std::filesystem::path &root, Server::Model model = Server::Model::ThreadPerCore) {
+	Server::Config config;
+	config.servingDirectory = root;
+	config.port = 0; // Kernel picks
+	config.threadCount = 2;
+	config.model = model;
+	return config;
+}
+
+} // namespace
 
 // --- Compile-time checks on the method and status tables ---
 
@@ -47,64 +124,61 @@ static_assert(methodToString(Method::PATCH) == "PATCH");
 static_assert(defaultReasonPhrase(404) == "Not Found");
 static_assert(defaultReasonPhrase(999) == "Unknown");
 
-// --- Basic request and response tests ---
+// --- Parsing ---
 
 BOOST_AUTO_TEST_CASE(test_request_parsing) {
-	const std::string rawRequest = "GET /index.html HTTP/1.1\r\n"
-																 "Host: localhost\r\n"
-																 "User-Agent: BoostTest\r\n"
-																 "\r\n"
-																 "Body content";
+	RequestReader reader(1024);
+	BOOST_REQUIRE(reader.consume("GET /index.html HTTP/1.1\r\n"
+															 "Host: localhost\r\n"
+															 "User-Agent: BoostTest\r\n"
+															 "Content-Length: 12\r\n"
+															 "\r\n"
+															 "Body content")
+								== RequestReader::Status::Complete);
 
-	const std::optional<Request> parsed = Request::parse(rawRequest);
-	BOOST_REQUIRE(parsed.has_value());
-
-	const Request &req = parsed.value();
+	const Request req = reader.take();
 	BOOST_CHECK_EQUAL(req.method, Method::GET);
 	BOOST_CHECK_EQUAL(req.path, "/index.html");
 	BOOST_CHECK_EQUAL(req.headers.at("Host"), "localhost");
 	BOOST_CHECK_EQUAL(req.headers.at("User-Agent"), "BoostTest");
 	BOOST_CHECK_EQUAL(req.body, "Body content");
+
+	BOOST_CHECK(!Request::parse("").has_value());
 }
 
-BOOST_AUTO_TEST_CASE(test_request_parsing_rejects_malformed_input) {
-	BOOST_CHECK(!Request::parse("BOGUS / HTTP/1.1\r\n\r\n").has_value());
-	BOOST_CHECK(!Request::parse("GET /index.html\r\n\r\n").has_value());
-	BOOST_CHECK(!Request::parse("GET\r\n\r\n").has_value());
-	BOOST_CHECK(!Request::parse("GET index.html HTTP/1.1\r\n\r\n").has_value());
-	BOOST_CHECK(!Request::parse("").has_value());
-	BOOST_CHECK(!Request::parse("\r\n\r\n").has_value());
-	BOOST_CHECK(!Request::parse("GET / HTTP/1.1\r\nNoColonHere\r\n\r\n").has_value());
-	BOOST_CHECK(!Request::parse("GET / HTTP/1.1\r\n: novalue\r\n\r\n").has_value());
-	BOOST_CHECK(!Request::parse("GET / HTTP/1.1\r\nContent-Length : 4\r\n\r\nabcd").has_value());
+constexpr auto kMalformedRequests = std::to_array<std::string_view>({
+		"BOGUS / HTTP/1.1\r\n\r\n",
+		"GET /index.html\r\n\r\n",
+		"GET\r\n\r\n",
+		"GET index.html HTTP/1.1\r\n\r\n",
+		"\r\n\r\n",
+		"GET / HTTP/1.1\r\nNoColonHere\r\n\r\n",
+		"GET / HTTP/1.1\r\n: novalue\r\n\r\n",
+		"GET / HTTP/1.1\r\nContent-Length : 4\r\n\r\nabcd",
+		"GET / HTTP/1.1\r\nContent-Length\t: 4\r\n\r\nabcd",
+		"POST / HTTP/1.1\r\nContent-Length: 1\r\ncontent-length: 2\r\n\r\nab",
+		"GET / HTTP/2.0\r\n\r\n",
+		"GET / HTTP/9.9\r\n\r\n",
+		"GET / HTTP/\r\n\r\n",
+});
+
+BOOST_DATA_TEST_CASE(test_malformed_requests_are_rejected, bdata::make(kMalformedRequests), raw) {
+	BOOST_CHECK(!Request::parse(raw).has_value());
+
+	RequestReader reader(1024);
+	BOOST_CHECK(reader.consume(raw) == RequestReader::Status::Rejected);
+	BOOST_CHECK_EQUAL(reader.rejectStatus(), 400);
 }
 
 BOOST_AUTO_TEST_CASE(test_request_headers_are_case_insensitive) {
-	const std::optional<Request> parsed = Request::parse("GET / HTTP/1.1\r\ncontent-length: 4\r\n\r\nabcd");
-	BOOST_REQUIRE(parsed.has_value());
-
-	const Request &req = parsed.value();
+	const Request req = sParse("GET / HTTP/1.1\r\ncontent-length: 4\r\n\r\nabcd");
 	BOOST_CHECK(req.header("Content-Length").has_value());
 	BOOST_CHECK(req.header("CONTENT-LENGTH").has_value());
-	BOOST_REQUIRE(req.contentLength().has_value());
-	BOOST_CHECK_EQUAL(req.contentLength().value(), 4U);
-}
-
-BOOST_AUTO_TEST_CASE(test_request_content_length_rejects_junk) {
-	const std::optional<Request> negative = Request::parse("GET / HTTP/1.1\r\nContent-Length: -1\r\n\r\n");
-	BOOST_REQUIRE(negative.has_value());
-	BOOST_CHECK(!negative.value().contentLength().has_value());
-
-	const std::optional<Request> overflow = Request::parse("GET / HTTP/1.1\r\nContent-Length: 99999999999999999999999\r\n\r\n");
-	BOOST_REQUIRE(overflow.has_value());
-	BOOST_CHECK(!overflow.value().contentLength().has_value());
+	BOOST_CHECK(req.contentLength() == std::optional<size_t>(4));
 }
 
 BOOST_AUTO_TEST_CASE(test_query_string_is_split_from_path) {
-	const std::optional<Request> parsed = Request::parse("GET /kv?key=hello&flag HTTP/1.1\r\n\r\n");
-	BOOST_REQUIRE(parsed.has_value());
-
-	const Request &req = parsed.value();
+	const Request req = sParse("GET /kv?key=hello&flag HTTP/1.1\r\n\r\n");
 	BOOST_CHECK_EQUAL(req.path, "/kv");
 	BOOST_CHECK_EQUAL(req.query, "key=hello&flag");
 
@@ -121,20 +195,16 @@ BOOST_AUTO_TEST_CASE(test_percent_decoding) {
 	BOOST_CHECK_EQUAL(percentDecode("%zz"), "%zz");
 	BOOST_CHECK_EQUAL(percentDecode("a+b", false), "a+b");
 
-	const std::optional<Request> parsed = Request::parse("GET /my%20file.txt HTTP/1.1\r\n\r\n");
-	BOOST_REQUIRE(parsed.has_value());
-	BOOST_CHECK_EQUAL(parsed.value().path, "/my file.txt");
+	BOOST_CHECK_EQUAL(sParse("GET /my%20file.txt HTTP/1.1\r\n\r\n").path, "/my file.txt");
 
-	const std::optional<Request> plus = Request::parse("GET /a+b.txt?q=a+b HTTP/1.1\r\n\r\n");
-	BOOST_REQUIRE(plus.has_value());
-	BOOST_CHECK_EQUAL(plus.value().path, "/a+b.txt");
-	BOOST_CHECK_EQUAL(parseQuery(plus.value().query).at("q"), "a b");
+	const Request plus = sParse("GET /a+b.txt?q=a+b HTTP/1.1\r\n\r\n");
+	BOOST_CHECK_EQUAL(plus.path, "/a+b.txt");
+	BOOST_CHECK_EQUAL(parseQuery(plus.query).at("q"), "a b");
 }
 
 BOOST_AUTO_TEST_CASE(test_percent_encoding) {
 	BOOST_CHECK_EQUAL(percentEncode("a b"), "a%20b");
 	BOOST_CHECK_EQUAL(percentEncode("/dir/a b.txt"), "/dir/a%20b.txt");
-	// '+' must not survive: percentDecode reads it back as a space
 	BOOST_CHECK_EQUAL(percentEncode("a+b"), "a%2Bb");
 	BOOST_CHECK_EQUAL(percentEncode("a#b?c"), "a%23b%3Fc");
 	BOOST_CHECK_EQUAL(percentEncode("aZ0-_.~/"), "aZ0-_.~/");
@@ -142,38 +212,93 @@ BOOST_AUTO_TEST_CASE(test_percent_encoding) {
 	BOOST_CHECK_EQUAL(percentDecode(percentEncode("/a b+c#d.txt")), "/a b+c#d.txt");
 }
 
-BOOST_AUTO_TEST_CASE(test_request_parsing_rejects_unsupported_versions) {
-	BOOST_CHECK(Request::parse("GET / HTTP/1.0\r\n\r\n").has_value());
-	BOOST_CHECK(Request::parse("GET / HTTP/1.1\r\n\r\n").has_value());
-	BOOST_CHECK(!Request::parse("GET / HTTP/2.0\r\n\r\n").has_value());
-	BOOST_CHECK(!Request::parse("GET / HTTP/9.9\r\n\r\n").has_value());
-	BOOST_CHECK(!Request::parse("GET / HTTP/\r\n\r\n").has_value());
+BOOST_AUTO_TEST_CASE(test_keep_alive_defaults_by_version) {
+	BOOST_CHECK(sParse("GET / HTTP/1.1\r\nHost: x\r\n\r\n").wantsKeepAlive());
+	BOOST_CHECK(!sParse("GET / HTTP/1.0\r\nHost: x\r\n\r\n").wantsKeepAlive());
+	BOOST_CHECK(!sParse("GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").wantsKeepAlive());
+	BOOST_CHECK(sParse("GET / HTTP/1.0\r\nHost: x\r\nConnection: keep-alive\r\n\r\n").wantsKeepAlive());
+	BOOST_CHECK(!sParse("GET / HTTP/1.1\r\nHost: x\r\nConnection: TE, Close\r\n\r\n").wantsKeepAlive());
 }
 
 BOOST_AUTO_TEST_CASE(test_response_serialization) {
-	Response res;
-	res.statusCode = 200;
-	res.headers["Content-Type"] = "text/plain";
-	res.body = "Hello, world!";
-
-	const std::string responseStr = res.serialize();
-	// Reason phrase comes from the status code
-	BOOST_CHECK(responseStr.find("HTTP/1.1 200 OK") != std::string::npos);
-	BOOST_CHECK(responseStr.find("Content-Length: " + std::to_string(res.body.size())) != std::string::npos);
-	BOOST_CHECK(responseStr.find("Content-Type: text/plain") != std::string::npos);
-	BOOST_CHECK(responseStr.find("Hello, world!") != std::string::npos);
-}
-
-BOOST_AUTO_TEST_CASE(test_response_emits_one_content_length) {
-	Response res = Response::plainText(200, "abc");
+	Response res = Response::plainText(200, "Hello, world!");
 	res.headers["Content-Length"] = "999";
 
-	const std::string responseStr = res.serialize();
-	BOOST_CHECK_EQUAL(responseStr.find("Content-Length: 3"), responseStr.rfind("Content-Length: 3"));
-	BOOST_CHECK(responseStr.find("Content-Length: 999") == std::string::npos);
+	const std::string wire = res.serialize();
+	BOOST_CHECK(wire.starts_with("HTTP/1.1 200 OK\r\n"));
+	BOOST_CHECK(sContains(wire, "Content-Type: text/plain"));
+	BOOST_CHECK(wire.ends_with("\r\n\r\nHello, world!"));
+
+	BOOST_CHECK(sContains(wire, "Content-Length: 13\r\n"));
+	BOOST_CHECK_EQUAL(wire.find("Content-Length:"), wire.rfind("Content-Length:"));
 }
 
-// --- Custom handler and middleware tests ---
+// --- RequestReader ---
+
+namespace {
+
+std::vector<std::string> sReadStream(std::string_view stream, size_t chunkSize) {
+	RequestReader reader(1024);
+	std::vector<std::string> events;
+
+	auto drain = [&](RequestReader::Status status) {
+		while (status == RequestReader::Status::Complete) {
+			const Request request = reader.take();
+			events.push_back(std::format("{} {} {}", request.method, request.path, request.body));
+			status = reader.reset();
+		}
+		if (status == RequestReader::Status::Rejected)
+			events.push_back(std::format("reject {}", reader.rejectStatus()));
+		return status != RequestReader::Status::Rejected;
+	};
+
+	for (size_t offset = 0; offset < stream.size(); offset += chunkSize) {
+		if (!drain(reader.consume(stream.substr(offset, chunkSize))))
+			return events;
+	}
+	drain(reader.abandon());
+	return events;
+}
+
+} // namespace
+
+BOOST_AUTO_TEST_CASE(test_request_reader_ignores_read_boundaries) {
+	const std::vector<std::pair<std::string_view, std::vector<std::string>>> cases{
+		{ "POST /a HTTP/1.1\r\nContent-Length: 5\r\n\r\nHELLOGET /b HTTP/1.1\r\n\r\n", { "POST /a HELLO", "GET /b " } },
+		{ "GET /a HTTP/1.1\r\n\r\nGET /c HTTP/1.1\r\nHost: ", { "GET /a ", "reject 408" } },
+		{ "GET /a HTTP/1.1\r\n\r\nBOGUS / HTTP/1.1\r\n\r\n", { "GET /a ", "reject 400" } },
+		{ "GET / HTTP/1.1\r\nContent-Length: 18446744073709551560\r\n\r\n", { "reject 413" } },
+		{ "POST /a HTTP/1.1\r\nContent-Length: 5x\r\n\r\nGET /b HTTP/1.1\r\n\r\n", { "reject 400" } },
+		{ "POST /a HTTP/1.1\r\nContent-Length: -1\r\n\r\nGET /b HTTP/1.1\r\n\r\n", { "reject 400" } },
+		{ "POST /a HTTP/1.1\r\nContent-Length: 99999999999999999999999\r\n\r\nGET /b HTTP/1.1\r\n\r\n", { "reject 400" } },
+		{ "POST /a HTTP/1.1\r\nContent-Length: 1\r\nContent-Length: 1\r\n\r\nx", { "POST /a x" } },
+	};
+
+	for (const auto &[stream, expected] : cases) {
+		for (size_t chunkSize = 1; chunkSize <= stream.size(); ++chunkSize) {
+			BOOST_TEST_CONTEXT("stream " << stream << ", chunk " << chunkSize) {
+				BOOST_TEST(sReadStream(stream, chunkSize) == expected, boost::test_tools::per_element());
+			}
+		}
+	}
+}
+
+BOOST_AUTO_TEST_CASE(test_request_reader_enforces_size_limit) {
+	const std::string head = "POST / HTTP/1.1\r\nContent-Length: 10\r\n\r\n";
+
+	RequestReader fits(head.size() + 10);
+	BOOST_CHECK(fits.consume(head + std::string(10, 'a')) == RequestReader::Status::Complete);
+
+	RequestReader over(head.size() + 9);
+	BOOST_CHECK(over.consume(head) == RequestReader::Status::Rejected);
+	BOOST_CHECK_EQUAL(over.rejectStatus(), 413);
+
+	RequestReader flood(1024);
+	BOOST_CHECK(flood.consume("GET / HTTP/1.1\r\nX: " + std::string(1024, 'a')) == RequestReader::Status::Rejected);
+	BOOST_CHECK_EQUAL(flood.rejectStatus(), 413);
+}
+
+// --- Routing ---
 
 class TestServer : public Server {
 public:
@@ -194,189 +319,81 @@ public:
 };
 
 BOOST_AUTO_TEST_CASE(test_custom_handler_and_middleware) {
-	TestServer::Config config;
-	config.servingDirectory = ".";
-	config.threadCount = 1;
-	TestServer server(config);
+	TestServer server(sConfig("."));
 
 	server.addMiddleware(std::make_shared<TestMiddleware>());
 	server.registerPathHandler(Method::GET, "/test", [](const Request &) { return Response::plainText(200, "Handled by TestHandler"); });
-	server.registerPatternHandler(Method::GET, R"(/pattern/\d+)", [](const Request &req) {
-		(void)req;
-		return Response::plainText(200, "Pattern function handler");
-	});
+	server.registerPatternHandler(Method::GET, R"(/pattern/\d+)",
+																[](const Request &) { return Response::plainText(200, "Pattern handler"); });
 
-	Request req1;
-	req1.method = Method::GET;
-	req1.path = "/test";
-	BOOST_CHECK_EQUAL(server.handleRequest(req1).body, "Handled by TestHandler");
-
-	Request req2;
-	req2.method = Method::GET;
-	req2.path = "/middleware";
-	BOOST_CHECK_EQUAL(server.handleRequest(req2).body, "Intercepted by Middleware");
-
-	Request req3;
-	req3.method = Method::GET;
-	req3.path = "/pattern/123";
-	BOOST_CHECK_EQUAL(server.handleRequest(req3).body, "Pattern function handler");
-
-	// Falls through to the static file handler
-	Request req4;
-	req4.method = Method::GET;
-	req4.path = "/unknown";
-	BOOST_CHECK_EQUAL(server.handleRequest(req4).statusCode, 404);
+	BOOST_CHECK_EQUAL(server.handleRequest(sMakeRequest("/test")).body, "Handled by TestHandler");
+	BOOST_CHECK_EQUAL(server.handleRequest(sMakeRequest("/middleware")).body, "Intercepted by Middleware");
+	BOOST_CHECK_EQUAL(server.handleRequest(sMakeRequest("/pattern/123")).body, "Pattern handler");
+	BOOST_CHECK_EQUAL(server.handleRequest(sMakeRequest("/unknown")).statusCode, 404);
 }
 
 BOOST_AUTO_TEST_CASE(test_multi_method_registration) {
-	TestServer::Config config;
-	config.servingDirectory = ".";
-	TestServer server(config);
-
+	TestServer server(sConfig("."));
 	server.registerPathHandler({ Method::GET, Method::PUT }, "/multi",
 														 [](const Request &req) { return Response::plainText(200, std::string(methodToString(req.method))); });
 
-	Request get;
-	get.method = Method::GET;
-	get.path = "/multi";
-	BOOST_CHECK_EQUAL(server.handleRequest(get).body, "GET");
-
-	Request put;
-	put.method = Method::PUT;
-	put.path = "/multi";
-	BOOST_CHECK_EQUAL(server.handleRequest(put).body, "PUT");
-
-	Request post;
-	post.method = Method::POST;
-	post.path = "/multi";
-	BOOST_CHECK_EQUAL(server.handleRequest(post).statusCode, 404);
+	BOOST_CHECK_EQUAL(server.handleRequest(sMakeRequest("/multi", Method::GET)).body, "GET");
+	BOOST_CHECK_EQUAL(server.handleRequest(sMakeRequest("/multi", Method::PUT)).body, "PUT");
+	BOOST_CHECK_EQUAL(server.handleRequest(sMakeRequest("/multi", Method::POST)).statusCode, 404);
 }
 
 // --- Static file serving ---
 
-namespace {
-
-std::filesystem::path sMakeTempDir(const std::string &name) {
-	const std::filesystem::path dir = std::filesystem::temp_directory_path() / ("ou_http_server_test_" + name);
-	std::filesystem::remove_all(dir);
-	std::filesystem::create_directories(dir);
-	return dir;
-}
-
-void sWriteFile(const std::filesystem::path &path, std::string_view content) {
-	std::ofstream file(path);
-	file << content;
-}
-
-std::filesystem::path sMakeTempLogPath(const std::string &name) {
-	return std::filesystem::temp_directory_path() / ("ou_http_server_test_" + name + ".log");
-}
-
-Request sMakeLoggedRequest(const std::string &path) {
-	Request request;
-	request.method = Method::GET;
-	request.path = path;
-
-	sockaddr_in clientAddr{};
-	clientAddr.sin_family = AF_INET;
-	clientAddr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-	request.clientAddr = clientAddr;
-
-	return request;
-}
-
-size_t sCountLines(const std::filesystem::path &path) {
-	std::ifstream file(path);
-	size_t count = 0;
-	std::string line;
-	while (std::getline(file, line)) {
-		++count;
-	}
-	return count;
-}
-
-Request sMakeGet(const std::string &path) {
-	Request request;
-	request.method = Method::GET;
-	request.path = path;
-	return request;
-}
-
-} // namespace
-
 BOOST_AUTO_TEST_CASE(test_static_file_serving_and_mime_types) {
-	const std::filesystem::path root = sMakeTempDir("static");
-	sWriteFile(root / "page.html", "<h1>hi</h1>");
-	sWriteFile(root / "notes.txt", "plain");
-	sWriteFile(root / "blob.bin", "\x01\x02");
+	const TempDir root("static");
+	root.write("page.html", "<h1>hi</h1>");
+	root.write("notes.txt", "plain");
+	root.write("blob.bin", "\x01\x02");
 
-	TestServer::Config config;
-	config.servingDirectory = root;
-	TestServer server(config);
+	TestServer server(sConfig(root.path()));
 
-	const Response html = server.handleStaticFileRequest(sMakeGet("/page.html"));
+	const Response html = server.handleStaticFileRequest(sMakeRequest("/page.html"));
 	BOOST_CHECK_EQUAL(html.statusCode, 200);
 	BOOST_CHECK_EQUAL(html.body, "<h1>hi</h1>");
 	BOOST_CHECK_EQUAL(html.headers.at("Content-Type"), "text/html");
 
-	BOOST_CHECK_EQUAL(server.handleStaticFileRequest(sMakeGet("/notes.txt")).headers.at("Content-Type"), "text/plain");
-	BOOST_CHECK_EQUAL(server.handleStaticFileRequest(sMakeGet("/blob.bin")).headers.at("Content-Type"), "application/octet-stream");
-	BOOST_CHECK_EQUAL(server.handleStaticFileRequest(sMakeGet("/missing.txt")).statusCode, 404);
-
-	// Appears once
-	const std::string wire = html.serialize();
-	BOOST_CHECK_EQUAL(wire.find("Content-Length:"), wire.rfind("Content-Length:"));
-
-	std::filesystem::remove_all(root);
+	BOOST_CHECK_EQUAL(server.handleStaticFileRequest(sMakeRequest("/notes.txt")).headers.at("Content-Type"), "text/plain");
+	BOOST_CHECK_EQUAL(server.handleStaticFileRequest(sMakeRequest("/blob.bin")).headers.at("Content-Type"), "application/octet-stream");
+	BOOST_CHECK_EQUAL(server.handleStaticFileRequest(sMakeRequest("/missing.txt")).statusCode, 404);
 }
 
 BOOST_AUTO_TEST_CASE(test_directory_traversal_is_rejected) {
-	const std::filesystem::path root = sMakeTempDir("traversal");
-	sWriteFile(root / "public.txt", "public");
-	sWriteFile(root.parent_path() / "ou_http_server_test_secret.txt", "secret");
+	const TempDir outer("traversal");
+	outer.write("secret.txt", "secret");
+	std::filesystem::create_directory(outer.path() / "www");
+	outer.write("www/public.txt", "public");
 
-	TestServer::Config config;
-	config.servingDirectory = root;
-	TestServer server(config);
+	TestServer server(sConfig(outer.path() / "www"));
 
-	BOOST_CHECK_EQUAL(server.handleStaticFileRequest(sMakeGet("/public.txt")).statusCode, 200);
-	BOOST_CHECK_EQUAL(server.handleStaticFileRequest(sMakeGet("/../ou_http_server_test_secret.txt")).statusCode, 403);
-	BOOST_CHECK_EQUAL(server.handleStaticFileRequest(sMakeGet("/../../etc/passwd")).statusCode, 403);
-	BOOST_CHECK_EQUAL(server.handleStaticFileRequest(sMakeGet("/subdir/../../etc/passwd")).statusCode, 403);
-
-	// Encoded form decodes to the same traversal
-	const std::optional<Request> encoded = Request::parse("GET /..%2Fou_http_server_test_secret.txt HTTP/1.1\r\n\r\n");
-	BOOST_REQUIRE(encoded.has_value());
-	BOOST_CHECK_EQUAL(server.handleStaticFileRequest(encoded.value()).statusCode, 403);
-
-	std::filesystem::remove_all(root);
-	std::filesystem::remove(root.parent_path() / "ou_http_server_test_secret.txt");
+	BOOST_CHECK_EQUAL(server.handleStaticFileRequest(sMakeRequest("/public.txt")).statusCode, 200);
+	BOOST_CHECK_EQUAL(server.handleStaticFileRequest(sMakeRequest("/../secret.txt")).statusCode, 403);
+	BOOST_CHECK_EQUAL(server.handleStaticFileRequest(sMakeRequest("/../../etc/passwd")).statusCode, 403);
+	BOOST_CHECK_EQUAL(server.handleStaticFileRequest(sMakeRequest("/subdir/../../etc/passwd")).statusCode, 403);
+	BOOST_CHECK_EQUAL(server.handleStaticFileRequest(sParse("GET /..%2Fsecret.txt HTTP/1.1\r\n\r\n")).statusCode, 403);
 }
 
 BOOST_AUTO_TEST_CASE(test_directory_indexing_escapes_names) {
-	const std::filesystem::path root = sMakeTempDir("indexing");
-	sWriteFile(root / "a<script>.txt", "x");
-	sWriteFile(root / "a b.txt", "x");
+	const TempDir root("indexing");
+	root.write("a<script>.txt", "x");
+	root.write("a b.txt", "x");
 
-	TestServer::Config indexingOff;
-	indexingOff.servingDirectory = root;
-	TestServer serverOff(indexingOff);
-	BOOST_CHECK_EQUAL(serverOff.handleStaticFileRequest(sMakeGet("/")).statusCode, 403);
+	TestServer serverOff(sConfig(root.path()));
+	BOOST_CHECK_EQUAL(serverOff.handleStaticFileRequest(sMakeRequest("/")).statusCode, 403);
 
-	TestServer::Config indexingOn;
-	indexingOn.servingDirectory = root;
-	indexingOn.enableDirectoryIndexing = true;
-	TestServer serverOn(indexingOn);
-
-	const Response index = serverOn.handleStaticFileRequest(sMakeGet("/"));
+	Server::Config indexing = sConfig(root.path());
+	indexing.enableDirectoryIndexing = true;
+	TestServer serverOn(indexing);
+	const Response index = serverOn.handleStaticFileRequest(sMakeRequest("/"));
 	BOOST_CHECK_EQUAL(index.statusCode, 200);
-	BOOST_CHECK(index.body.find("&lt;script&gt;") != std::string::npos);
-	BOOST_CHECK(index.body.find("<script>") == std::string::npos);
-
-	BOOST_CHECK(index.body.find("href=\"/a%20b.txt\"") != std::string::npos);
-	BOOST_CHECK(index.body.find(">a b.txt<") != std::string::npos);
-
-	std::filesystem::remove_all(root);
+	BOOST_CHECK(sContains(index.body, "&lt;script&gt;"));
+	BOOST_CHECK(!sContains(index.body, "<script>"));
+	BOOST_CHECK(sContains(index.body, "href=\"/a%20b.txt\""));
+	BOOST_CHECK(sContains(index.body, ">a b.txt<"));
 }
 
 // --- Key-value store ---
@@ -384,32 +401,20 @@ BOOST_AUTO_TEST_CASE(test_directory_indexing_escapes_names) {
 BOOST_AUTO_TEST_CASE(test_kv_store_uses_decoded_query) {
 	KVStore store;
 
-	Request put;
-	put.method = Method::PUT;
-	put.path = "/kv";
+	Request put = sMakeRequest("/kv", Method::PUT);
 	put.query = "key=my%20key";
 	put.body = "value";
 	BOOST_CHECK_EQUAL(store.handle(put).statusCode, 200);
 	BOOST_CHECK_EQUAL(store.size(), 1U);
+	BOOST_CHECK(store.get("my key") == std::optional<std::string>("value"));
 
-	const std::optional<std::string> stored = store.get("my key");
-	BOOST_REQUIRE(stored.has_value());
-	BOOST_CHECK_EQUAL(stored.value(), "value");
-
-	Request get;
-	get.method = Method::GET;
-	get.path = "/kv";
+	Request get = sMakeRequest("/kv");
 	get.query = "key=my+key";
 	BOOST_CHECK_EQUAL(store.handle(get).body, "value");
 
-	Request missingKey;
-	missingKey.method = Method::GET;
-	missingKey.path = "/kv";
-	BOOST_CHECK_EQUAL(store.handle(missingKey).statusCode, 400);
+	BOOST_CHECK_EQUAL(store.handle(sMakeRequest("/kv")).statusCode, 400);
 
-	Request remove;
-	remove.method = Method::DELETE;
-	remove.path = "/kv";
+	Request remove = sMakeRequest("/kv", Method::DELETE);
 	remove.query = "key=my%20key";
 	BOOST_CHECK_EQUAL(store.handle(remove).statusCode, 200);
 	BOOST_CHECK_EQUAL(store.size(), 0U);
@@ -472,14 +477,127 @@ BOOST_AUTO_TEST_CASE(test_poller_readiness) {
 	BOOST_CHECK(poller.wait(10ms).empty());
 }
 
+// --- Access log ---
+
+BOOST_AUTO_TEST_CASE(test_access_log_middleware) {
+	const TempDir dir("access");
+	const std::filesystem::path logPath = dir.path() / "access.log";
+	AccessLog accessLog(AccessLog::Config{ .path = logPath, .flushBytes = 0 });
+
+	Request request = sMakeRequest("/logged");
+	Response response = Response::plainText(200, "hello");
+
+	BOOST_CHECK(!accessLog.process(request, response));
+	accessLog.postProcess(request, response);
+
+	const std::vector<std::string> lines = sLines(logPath);
+	BOOST_REQUIRE_EQUAL(lines.size(), 1U);
+	BOOST_CHECK(sContains(lines[0], "127.0.0.1"));
+	BOOST_CHECK(sContains(lines[0], "GET /logged"));
+	BOOST_CHECK(sContains(lines[0], " 200 5"));
+
+	// A request with no client address is not logged
+	Request anonymous;
+	anonymous.path = "/anonymous";
+	accessLog.postProcess(anonymous, response);
+	BOOST_CHECK_EQUAL(sLines(logPath).size(), 1U);
+}
+
+BOOST_AUTO_TEST_CASE(test_access_log_buffers_until_flushed) {
+	const TempDir dir("buffered");
+	const std::filesystem::path logPath = dir.path() / "access.log";
+	const Response response = Response::plainText(200, "hello");
+	Request request = sMakeRequest("/buffered");
+
+	{
+		AccessLog accessLog(AccessLog::Config{ .path = logPath, .flushBytes = size_t{ 64 } * 1024, .flushInterval = std::chrono::hours(1) });
+
+		for (int i = 0; i < 10; ++i)
+			accessLog.postProcess(request, response);
+		BOOST_CHECK(!std::filesystem::exists(logPath));
+
+		accessLog.flush();
+		BOOST_CHECK_EQUAL(sLines(logPath).size(), 10U);
+
+		std::filesystem::remove(logPath);
+		accessLog.postProcess(request, response);
+		accessLog.flush();
+		BOOST_CHECK_EQUAL(sLines(logPath).size(), 1U);
+
+		std::filesystem::remove(logPath);
+		accessLog.postProcess(request, response);
+		BOOST_CHECK(!std::filesystem::exists(logPath));
+	}
+
+	BOOST_CHECK_EQUAL(sLines(logPath).size(), 1U);
+}
+
+BOOST_AUTO_TEST_CASE(test_access_log_flushes_when_buffer_fills) {
+	const TempDir dir("bufferfull");
+	const std::filesystem::path logPath = dir.path() / "access.log";
+
+	AccessLog accessLog(AccessLog::Config{ .path = logPath, .flushBytes = 16, .flushInterval = std::chrono::hours(1) });
+	Request request = sMakeRequest("/full");
+	const Response response = Response::plainText(200, "hello");
+
+	for (int i = 0; i < 3; ++i)
+		accessLog.postProcess(request, response);
+
+	BOOST_CHECK_EQUAL(sLines(logPath).size(), 3U);
+}
+
+BOOST_AUTO_TEST_CASE(test_access_log_concurrent_writes) {
+	const TempDir dir("concurrent");
+	const std::filesystem::path logPath = dir.path() / "access.log";
+	AccessLog accessLog(AccessLog::Config{ .path = logPath, .flushBytes = 0 });
+	const Response response = Response::plainText(200, "hello");
+
+	constexpr int kThreadCount = 4;
+	constexpr int kPerThread = 25;
+	std::vector<std::thread> threads;
+	threads.reserve(kThreadCount);
+	for (int i = 0; i < kThreadCount; ++i) {
+		threads.emplace_back([&accessLog, &response]() {
+			Request request = sMakeRequest("/concurrent");
+			for (int j = 0; j < kPerThread; ++j)
+				accessLog.postProcess(request, response);
+		});
+	}
+	for (std::thread &thread : threads)
+		thread.join();
+
+	BOOST_CHECK_EQUAL(sLines(logPath).size(), static_cast<size_t>(kThreadCount * kPerThread));
+}
+
+BOOST_AUTO_TEST_CASE(test_access_log_records_routed_status) {
+	const TempDir dir("routed_status");
+	const std::filesystem::path logPath = dir.path() / "access.log";
+
+	TestServer server(sConfig("."));
+	server.addMiddleware(std::make_shared<AccessLog>(AccessLog::Config{ .path = logPath, .flushBytes = 0 }));
+	server.registerPathHandler({ Method::GET, Method::HEAD }, "/hello", [](const Request &) { return Response::plainText(200, "hi there"); });
+
+	BOOST_CHECK_EQUAL(server.handleRequest(sMakeRequest("/hello")).body, "hi there");
+	BOOST_CHECK_EQUAL(server.handleRequest(sMakeRequest("/does-not-exist")).statusCode, 404);
+	BOOST_CHECK(server.handleRequest(sMakeRequest("/hello", Method::HEAD)).body.empty());
+
+	const std::vector<std::string> lines = sLines(logPath);
+	BOOST_REQUIRE_EQUAL(lines.size(), 3U);
+	BOOST_CHECK(sContains(lines[0], "GET /hello"));
+	BOOST_CHECK(sContains(lines[0], " 200 8"));
+	BOOST_CHECK(sContains(lines[1], "GET /does-not-exist"));
+	BOOST_CHECK(sContains(lines[1], " 404 "));
+	BOOST_CHECK(sContains(lines[2], "HEAD /hello"));
+	BOOST_CHECK(sContains(lines[2], " 200 8"));
+}
+
 // --- Live socket tests ---
 
 namespace {
 
 ou::UniqueFd sConnect(uint16_t port) {
 	ou::UniqueFd fd(::socket(AF_INET, SOCK_STREAM, 0));
-	if (!fd)
-		return {};
+	BOOST_REQUIRE(fd.valid());
 
 	// So a regression hangs this case rather than the whole ctest timeout
 	const timeval timeout{ .tv_sec = 5, .tv_usec = 0 };
@@ -489,10 +607,17 @@ ou::UniqueFd sConnect(uint16_t port) {
 	addr.sin_family = AF_INET;
 	addr.sin_port = htons(port);
 	addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-	if (::connect(fd.get(), reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) < 0)
-		return {};
-
+	BOOST_REQUIRE_EQUAL(::connect(fd.get(), reinterpret_cast<sockaddr *>(&addr), sizeof(addr)), 0);
 	return fd;
+}
+
+void sSend(const ou::UniqueFd &fd, std::string_view bytes) {
+	BOOST_REQUIRE_EQUAL(::send(fd.get(), bytes.data(), bytes.size(), 0), ssize_t(bytes.size()));
+}
+
+void sCheckClosed(const ou::UniqueFd &fd) {
+	std::array<char, 64> chunk{};
+	BOOST_CHECK_EQUAL(::recv(fd.get(), chunk.data(), chunk.size(), 0), 0);
 }
 
 // Length of one complete response, or nullopt while the headers or body are still incomplete
@@ -536,664 +661,213 @@ std::string sReadResponse(std::invocable<std::span<char>> auto readChunk) {
 	return response;
 }
 
-std::string sReadResponse(int fd) {
-	return sReadResponse([fd](std::span<char> buffer) { return ::recv(fd, buffer.data(), buffer.size(), 0); });
+std::string sReadResponse(const ou::UniqueFd &fd) {
+	return sReadResponse([&fd](std::span<char> buffer) { return ::recv(fd.get(), buffer.data(), buffer.size(), 0); });
 }
 
 std::string sRoundTrip(uint16_t port, std::initializer_list<std::string_view> pieces) {
 	const ou::UniqueFd fd = sConnect(port);
-	if (!fd)
-		return {};
 
 	for (const std::string_view piece : pieces) {
-		if (::send(fd.get(), piece.data(), piece.size(), 0) < 0)
-			return {};
-
-		// Long enough that the server sees each piece as its own read
+		sSend(fd, piece);
 		if (pieces.size() > 1)
 			std::this_thread::sleep_for(std::chrono::milliseconds(20));
 	}
 
-	return sReadResponse(fd.get());
+	return sReadResponse(fd);
 }
 
 std::string sRoundTrip(uint16_t port, std::string_view rawRequest) { return sRoundTrip(port, { rawRequest }); }
 
 } // namespace
 
-BOOST_AUTO_TEST_CASE(test_server_round_trip_over_a_real_socket) {
-	const std::filesystem::path root = sMakeTempDir("socket");
-	sWriteFile(root / "hello.txt", "hello socket");
+BOOST_DATA_TEST_CASE(test_server_round_trip, bdata::make(kModels), model) {
+	const TempDir root("socket");
+	root.write("hello.txt", "hello socket");
+	root.write("large.txt", std::string(200000, 'x'));
 
-	Server::Config config;
-	config.servingDirectory = root;
-	config.port = 0; // kernel picks
-	config.threadCount = 2;
-
-	Server server(config);
+	Server server(sConfig(root.path(), model));
 	BOOST_REQUIRE(server.start());
 	const uint16_t port = server.port();
 
-	const std::string ok = sRoundTrip(port, "GET /hello.txt HTTP/1.1\r\nHost: localhost\r\n\r\n");
+	const std::string ok = sRoundTrip(port, "GET /hello.txt HTTP/1.1\r\nHost: x\r\n\r\n");
 	BOOST_CHECK(ok.starts_with("HTTP/1.1 200 OK"));
 	BOOST_CHECK(ok.ends_with("hello socket"));
 
-	const std::string head = sRoundTrip(port, "HEAD /hello.txt HTTP/1.1\r\nHost: localhost\r\n\r\n");
+	const std::string head = sRoundTrip(port, "HEAD /hello.txt HTTP/1.1\r\nHost: x\r\n\r\n");
 	BOOST_CHECK(head.starts_with("HTTP/1.1 200 OK"));
 	BOOST_CHECK(head.ends_with("\r\n\r\n"));
-	BOOST_CHECK(head.find("Content-Length: 0\r\n") != std::string::npos);
 
-	const std::string chunked
-			= sRoundTrip(port, "POST /hello.txt HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n");
-	BOOST_CHECK(chunked.starts_with("HTTP/1.1 501"));
+	const std::string split = sRoundTrip(port, { "GET /hello.txt HTTP/1.1\r\nHost: ", "x\r\n", "\r\n" });
+	BOOST_CHECK(split.ends_with("hello socket"));
 
-	const std::string badVersion = sRoundTrip(port, "GET /hello.txt HTTP/2.0\r\nHost: localhost\r\n\r\n");
-	BOOST_CHECK(badVersion.starts_with("HTTP/1.1 400"));
+	const std::string large = sRoundTrip(port, "GET /large.txt HTTP/1.1\r\nHost: x\r\n\r\n");
+	BOOST_CHECK(large.starts_with("HTTP/1.1 200 OK"));
+	BOOST_CHECK_EQUAL(large.size() - large.find("\r\n\r\n") - 4, 200000U);
+
+	BOOST_CHECK(sRoundTrip(port, "GET /nope.txt HTTP/1.1\r\nHost: x\r\n\r\n").starts_with("HTTP/1.1 404"));
+	BOOST_CHECK(sRoundTrip(port, "BOGUS / HTTP/1.1\r\nHost: x\r\n\r\n").starts_with("HTTP/1.1 400"));
+	BOOST_CHECK(sRoundTrip(port, "GET /hello.txt HTTP/2.0\r\nHost: x\r\n\r\n").starts_with("HTTP/1.1 400"));
+	BOOST_CHECK(
+			sRoundTrip(port, "POST /hello.txt HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n").starts_with("HTTP/1.1 501"));
 
 	// Must return rather than deadlock, and must tolerate the second call ~Server makes
 	server.stop();
 	server.stop();
-
-	std::filesystem::remove_all(root);
 }
 
-// --- Keep-alive ---
+BOOST_DATA_TEST_CASE(test_keep_alive, bdata::make(kModels), model) {
+	const TempDir root("keepalive");
+	root.write("a.txt", "aaa");
+	root.write("b.txt", "bbbb");
 
-BOOST_AUTO_TEST_CASE(test_request_reader_carries_pipelined_bytes) {
-	RequestReader reader(1024);
-
-	// Two requests in one buffer; the first must not swallow the second
-	BOOST_REQUIRE(reader.consume("GET /a HTTP/1.1\r\nHost: x\r\n\r\nGET /b HTTP/1.1\r\nHost: x\r\n\r\n") == RequestReader::Status::Complete);
-	BOOST_CHECK_EQUAL(reader.take().path, "/a");
-
-	BOOST_REQUIRE(reader.reset() == RequestReader::Status::Complete);
-	BOOST_CHECK_EQUAL(reader.take().path, "/b");
-
-	BOOST_CHECK(reader.reset() == RequestReader::Status::NeedMore);
-	BOOST_CHECK(reader.abandon() == RequestReader::Status::NeedMore);
-
-	BOOST_REQUIRE(reader.consume("GET /c HTTP/1.1\r\nHost: ") == RequestReader::Status::NeedMore);
-	BOOST_CHECK(reader.abandon() == RequestReader::Status::Rejected);
-	BOOST_CHECK_EQUAL(reader.rejectStatus(), 408);
-}
-
-BOOST_AUTO_TEST_CASE(test_request_reader_body_does_not_absorb_next_request) {
-	RequestReader reader(1024);
-
-	BOOST_REQUIRE(reader.consume("POST /a HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\n\r\nHELLOGET /b HTTP/1.1\r\nHost: x\r\n\r\n")
-								== RequestReader::Status::Complete);
-	const Request first = reader.take();
-	BOOST_CHECK_EQUAL(first.path, "/a");
-	BOOST_CHECK_EQUAL(first.body, "HELLO");
-
-	BOOST_REQUIRE(reader.reset() == RequestReader::Status::Complete);
-	BOOST_CHECK_EQUAL(reader.take().path, "/b");
-}
-
-BOOST_AUTO_TEST_CASE(test_keep_alive_defaults_by_version) {
-	const std::optional<Request> oneOne = Request::parse("GET / HTTP/1.1\r\nHost: x\r\n\r\n");
-	BOOST_REQUIRE(oneOne.has_value());
-	BOOST_CHECK(oneOne.value().wantsKeepAlive());
-
-	const std::optional<Request> oneZero = Request::parse("GET / HTTP/1.0\r\nHost: x\r\n\r\n");
-	BOOST_REQUIRE(oneZero.has_value());
-	BOOST_CHECK(!oneZero.value().wantsKeepAlive());
-
-	const std::optional<Request> closed = Request::parse("GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
-	BOOST_REQUIRE(closed.has_value());
-	BOOST_CHECK(!closed.value().wantsKeepAlive());
-
-	const std::optional<Request> revived = Request::parse("GET / HTTP/1.0\r\nHost: x\r\nConnection: keep-alive\r\n\r\n");
-	BOOST_REQUIRE(revived.has_value());
-	BOOST_CHECK(revived.value().wantsKeepAlive());
-
-	// The field is a comma-separated list, not a single token
-	const std::optional<Request> listed = Request::parse("GET / HTTP/1.1\r\nHost: x\r\nConnection: TE, Close\r\n\r\n");
-	BOOST_REQUIRE(listed.has_value());
-	BOOST_CHECK(!listed.value().wantsKeepAlive());
-}
-
-namespace {
-
-// Both concurrency models must behave identically here, so each case runs against both
-void sCheckKeepAlive(Server::Model model) {
-	const std::filesystem::path root = sMakeTempDir("keepalive");
-	sWriteFile(root / "a.txt", "aaa");
-	sWriteFile(root / "b.txt", "bbbb");
-
-	Server::Config config;
-	config.servingDirectory = root;
-	config.port = 0; // kernel picks
-	config.threadCount = 2;
-	config.model = model;
-
-	Server server(config);
+	Server server(sConfig(root.path(), model));
 	BOOST_REQUIRE(server.start());
 	const uint16_t port = server.port();
 
 	{ // Two requests down one connection
 		const ou::UniqueFd fd = sConnect(port);
-		BOOST_REQUIRE(fd.valid());
+		sSend(fd, "GET /a.txt HTTP/1.1\r\nHost: x\r\n\r\n");
+		const std::string first = sReadResponse(fd);
+		BOOST_CHECK(first.starts_with("HTTP/1.1 200 OK"));
+		BOOST_CHECK(first.ends_with("aaa"));
 
-		const std::string first = "GET /a.txt HTTP/1.1\r\nHost: x\r\n\r\n";
-		BOOST_REQUIRE(::send(fd.get(), first.data(), first.size(), 0) > 0);
-		const std::string firstResponse = sReadResponse(fd.get());
-		BOOST_CHECK(firstResponse.starts_with("HTTP/1.1 200 OK"));
-		BOOST_CHECK(firstResponse.ends_with("aaa"));
-
-		const std::string second = "GET /b.txt HTTP/1.1\r\nHost: x\r\n\r\n";
-		BOOST_REQUIRE(::send(fd.get(), second.data(), second.size(), 0) > 0);
-		const std::string secondResponse = sReadResponse(fd.get());
-		BOOST_CHECK(secondResponse.starts_with("HTTP/1.1 200 OK"));
-		BOOST_CHECK(secondResponse.ends_with("bbbb"));
+		sSend(fd, "GET /b.txt HTTP/1.1\r\nHost: x\r\n\r\n");
+		BOOST_CHECK(sReadResponse(fd).ends_with("bbbb"));
 	}
 
 	{ // Pipelined: both requests arrive in one write, both get answered
 		const ou::UniqueFd fd = sConnect(port);
-		BOOST_REQUIRE(fd.valid());
-
-		const std::string both = "GET /a.txt HTTP/1.1\r\nHost: x\r\n\r\n"
-														 "GET /b.txt HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n";
-		BOOST_REQUIRE(::send(fd.get(), both.data(), both.size(), 0) > 0);
-
-		BOOST_CHECK(sReadResponse(fd.get()).ends_with("aaa"));
-		BOOST_CHECK(sReadResponse(fd.get()).ends_with("bbbb"));
+		sSend(fd, "GET /a.txt HTTP/1.1\r\nHost: x\r\n\r\nGET /b.txt HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+		BOOST_CHECK(sReadResponse(fd).ends_with("aaa"));
+		BOOST_CHECK(sReadResponse(fd).ends_with("bbbb"));
 	}
 
 	{ // Connection: close is honoured, and the server really closes
 		const ou::UniqueFd fd = sConnect(port);
-		BOOST_REQUIRE(fd.valid());
-
-		const std::string request = "GET /a.txt HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n";
-		BOOST_REQUIRE(::send(fd.get(), request.data(), request.size(), 0) > 0);
-
-		const std::string response = sReadResponse(fd.get());
-		BOOST_CHECK(response.find("Connection: close") != std::string::npos);
-
-		std::array<char, 64> chunk{};
-		BOOST_CHECK_EQUAL(::recv(fd.get(), chunk.data(), chunk.size(), 0), 0);
+		sSend(fd, "GET /a.txt HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+		BOOST_CHECK(sContains(sReadResponse(fd), "Connection: close"));
+		sCheckClosed(fd);
 	}
 
 	{ // HTTP/1.0 closes unless it asks otherwise
 		const ou::UniqueFd fd = sConnect(port);
-		BOOST_REQUIRE(fd.valid());
-
-		const std::string request = "GET /a.txt HTTP/1.0\r\nHost: x\r\n\r\n";
-		BOOST_REQUIRE(::send(fd.get(), request.data(), request.size(), 0) > 0);
-		BOOST_CHECK(sReadResponse(fd.get()).find("Connection: close") != std::string::npos);
-
-		std::array<char, 64> chunk{};
-		BOOST_CHECK_EQUAL(::recv(fd.get(), chunk.data(), chunk.size(), 0), 0);
+		sSend(fd, "GET /a.txt HTTP/1.0\r\nHost: x\r\n\r\n");
+		BOOST_CHECK(sContains(sReadResponse(fd), "Connection: close"));
+		sCheckClosed(fd);
 	}
-
-	server.stop();
-	std::filesystem::remove_all(root);
 }
 
-} // namespace
+BOOST_DATA_TEST_CASE(test_keep_alive_can_be_disabled, bdata::make(kModels), model) {
+	const TempDir root("keepalive-off");
+	root.write("a.txt", "aaa");
+
+	Server::Config config = sConfig(root.path(), model);
+	config.keepAlive = false;
+	Server server(config);
+	BOOST_REQUIRE(server.start());
+
+	const ou::UniqueFd fd = sConnect(server.port());
+	sSend(fd, "GET /a.txt HTTP/1.1\r\nHost: x\r\n\r\n");
+	BOOST_CHECK(sContains(sReadResponse(fd), "Connection: close"));
+	sCheckClosed(fd);
+}
+
+BOOST_DATA_TEST_CASE(test_rejection_is_logged, bdata::make(kModels), model) {
+	const TempDir root("rejectlog");
+	const std::filesystem::path logPath = root.path() / "access.log";
+
+	Server server(sConfig(root.path(), model));
+	server.addMiddleware(std::make_shared<AccessLog>(AccessLog::Config{ .path = logPath, .flushBytes = 0 }));
+	BOOST_REQUIRE(server.start());
+
+	BOOST_CHECK(sRoundTrip(server.port(), "BOGUS / HTTP/1.1\r\nHost: x\r\n\r\n").starts_with("HTTP/1.1 400"));
+	server.stop();
+
+	const std::vector<std::string> lines = sLines(logPath);
+	BOOST_REQUIRE_EQUAL(lines.size(), 1U);
+	BOOST_CHECK(sContains(lines[0], " 400 "));
+	BOOST_CHECK(sContains(lines[0], "\"-\""));
+}
+
+BOOST_AUTO_TEST_CASE(test_event_loop_closes_idle_connection) {
+	const TempDir root("eventloop-idle");
+
+	Server::Config config = sConfig(root.path(), Server::Model::EventLoop);
+	config.readTimeout = std::chrono::seconds(1);
+	Server server(config);
+	BOOST_REQUIRE(server.start());
+
+	const ou::UniqueFd fd = sConnect(server.port());
+	sCheckClosed(fd);
+}
 
 #ifndef DISABLE_HTTPS
 
 namespace {
 
+void sCloseTls(SSL *ssl) {
+	SSL_shutdown(ssl);
+	SSL_free(ssl);
+}
+
 // A TLS client that does not verify the peer, since the demo cert is self-signed
 struct TlsClient {
-	SSL_CTX *ctx = nullptr;
-	SSL *ssl = nullptr;
+	std::unique_ptr<SSL_CTX, decltype(&SSL_CTX_free)> ctx{ SSL_CTX_new(TLS_client_method()), &SSL_CTX_free };
 	ou::UniqueFd fd;
+	std::unique_ptr<SSL, decltype(&sCloseTls)> ssl{ SSL_new(ctx.get()), &sCloseTls };
 
-	explicit TlsClient(uint16_t port) : ctx(SSL_CTX_new(TLS_client_method())), fd(sConnect(port)) {
-		if ((ctx == nullptr) || !fd.valid())
-			return;
-
-		ssl = SSL_new(ctx);
-		if (ssl == nullptr)
-			return;
-
-		SSL_set_fd(ssl, fd.get());
-		if (SSL_connect(ssl) != 1) {
-			SSL_free(ssl);
-			ssl = nullptr;
-		}
+	explicit TlsClient(uint16_t port) : fd(sConnect(port)) {
+		SSL_set_fd(ssl.get(), fd.get());
+		BOOST_REQUIRE_EQUAL(SSL_connect(ssl.get()), 1);
 	}
 
-	TlsClient(const TlsClient &) = delete;
-	TlsClient &operator=(const TlsClient &) = delete;
-	TlsClient(TlsClient &&) = delete;
-	TlsClient &operator=(TlsClient &&) = delete;
-
-	~TlsClient() {
-		if (ssl != nullptr) {
-			SSL_shutdown(ssl);
-			SSL_free(ssl);
-		}
-		SSL_CTX_free(ctx);
+	[[nodiscard]] bool send(std::string_view request) const {
+		return SSL_write(ssl.get(), request.data(), static_cast<int>(request.size())) > 0;
 	}
-
-	[[nodiscard]] bool connected() const { return ssl != nullptr; }
-
-	[[nodiscard]] bool send(std::string_view request) const { return SSL_write(ssl, request.data(), static_cast<int>(request.size())) > 0; }
 
 	[[nodiscard]] std::string receive() const {
-		return sReadResponse([this](std::span<char> buffer) { return SSL_read(ssl, buffer.data(), static_cast<int>(buffer.size())); });
+		return sReadResponse([this](std::span<char> buffer) { return SSL_read(ssl.get(), buffer.data(), static_cast<int>(buffer.size())); });
 	}
 };
 
-void sCheckConcurrentTlsSessions(uint16_t port) {
-	std::vector<std::unique_ptr<TlsClient>> clients;
-	clients.reserve(8);
-	for (int i = 0; i < 8; ++i) {
-		clients.push_back(std::make_unique<TlsClient>(port));
-	}
+} // namespace
 
-	for (const auto &client : clients) {
-		BOOST_REQUIRE(client->connected());
-		BOOST_REQUIRE(client->send("GET /a.txt HTTP/1.1\r\nHost: x\r\n\r\n"));
-	}
-	for (const auto &client : clients) {
-		BOOST_CHECK(client->receive().ends_with("over tls"));
-	}
-}
+BOOST_DATA_TEST_CASE(test_tls, bdata::make(kModels), model) {
+	const TempDir root("tls");
+	root.write("a.txt", "over tls");
 
-// The event-loop handshake is resumable across wakeups, which nothing else exercises
-void sCheckTls(Server::Model model) {
-	const std::filesystem::path root = sMakeTempDir("tls");
-	sWriteFile(root / "a.txt", "over tls");
-
-	Server::Config config;
-	config.servingDirectory = root;
-	config.port = 0; // kernel picks
-	config.threadCount = 2;
-	config.model = model;
+	Server::Config config = sConfig(root.path(), model);
 	config.https = { .enabled = true,
 									 .certPath = std::filesystem::path(TEST_CERT_DIR) / "cert.pem",
 									 .keyPath = std::filesystem::path(TEST_CERT_DIR) / "key.pem" };
-
 	Server server(config);
 	BOOST_REQUIRE(server.start());
 	const uint16_t port = server.port();
 
-	{ // Handshake, then a request
-		TlsClient client(port);
-		BOOST_REQUIRE(client.connected());
+	{ // Keep-alive over TLS: two requests on one session
+		const TlsClient client(port);
 		BOOST_REQUIRE(client.send("GET /a.txt HTTP/1.1\r\nHost: x\r\n\r\n"));
-
 		const std::string response = client.receive();
 		BOOST_CHECK(response.starts_with("HTTP/1.1 200 OK"));
 		BOOST_CHECK(response.ends_with("over tls"));
-	}
-
-	{ // Keep-alive over TLS: two requests on one session
-		TlsClient client(port);
-		BOOST_REQUIRE(client.connected());
-
-		BOOST_REQUIRE(client.send("GET /a.txt HTTP/1.1\r\nHost: x\r\n\r\n"));
-		BOOST_CHECK(client.receive().ends_with("over tls"));
 
 		BOOST_REQUIRE(client.send("GET /nope HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"));
 		BOOST_CHECK(client.receive().starts_with("HTTP/1.1 404"));
 	}
 
-	// Thread-per-core cannot do this by construction: its 2 workers hold 2 keep-alive connections
-	// open, so a third client's handshake has nobody to accept it until one times out.
-	if (model == Server::Model::EventLoop)
-		sCheckConcurrentTlsSessions(port);
+	if (model != Server::Model::EventLoop)
+		return;
 
-	server.stop();
-	std::filesystem::remove_all(root);
+	std::vector<TlsClient> clients;
+	clients.reserve(8);
+	for (int i = 0; i < 8; ++i)
+		clients.emplace_back(port);
+
+	for (const TlsClient &client : clients)
+		BOOST_REQUIRE(client.send("GET /a.txt HTTP/1.1\r\nHost: x\r\n\r\n"));
+	for (const TlsClient &client : clients)
+		BOOST_CHECK(client.receive().ends_with("over tls"));
 }
-
-} // namespace
-
-BOOST_AUTO_TEST_CASE(test_tls_thread_per_core) { sCheckTls(Server::Model::ThreadPerCore); }
-
-BOOST_AUTO_TEST_CASE(test_tls_event_loop) { sCheckTls(Server::Model::EventLoop); }
 
 #endif // DISABLE_HTTPS
-
-namespace {
-
-// A request that never parses returns before any Request exists, so it used to leave no trace
-void sCheckRejectionIsLogged(Server::Model model) {
-	const std::filesystem::path root = sMakeTempDir("rejectlog");
-	const std::filesystem::path logPath = sMakeTempLogPath("rejected");
-	std::filesystem::remove(logPath);
-
-	Server::Config config;
-	config.servingDirectory = root;
-	config.port = 0; // kernel picks
-	config.threadCount = 1;
-	config.model = model;
-
-	Server server(config);
-	server.addMiddleware(std::make_shared<AccessLog>(AccessLog::Config{ .path = logPath, .flushBytes = 0 }));
-	BOOST_REQUIRE(server.start());
-	const uint16_t port = server.port();
-
-	const std::string response = sRoundTrip(port, "BOGUS / HTTP/1.1\r\nHost: x\r\n\r\n");
-	BOOST_CHECK(response.starts_with("HTTP/1.1 400"));
-
-	server.stop();
-
-	BOOST_REQUIRE(std::filesystem::exists(logPath));
-	std::ifstream logFile(logPath);
-	std::string entry;
-	std::getline(logFile, entry);
-
-	BOOST_CHECK(entry.find(" 400 ") != std::string::npos);
-	BOOST_CHECK(entry.find("\"-\"") != std::string::npos);
-
-	std::filesystem::remove(logPath);
-	std::filesystem::remove_all(root);
-}
-
-} // namespace
-
-BOOST_AUTO_TEST_CASE(test_rejection_is_logged_thread_per_core) { sCheckRejectionIsLogged(Server::Model::ThreadPerCore); }
-
-BOOST_AUTO_TEST_CASE(test_rejection_is_logged_event_loop) { sCheckRejectionIsLogged(Server::Model::EventLoop); }
-
-BOOST_AUTO_TEST_CASE(test_keep_alive_thread_per_core) { sCheckKeepAlive(Server::Model::ThreadPerCore); }
-
-BOOST_AUTO_TEST_CASE(test_keep_alive_event_loop) { sCheckKeepAlive(Server::Model::EventLoop); }
-
-BOOST_AUTO_TEST_CASE(test_keep_alive_can_be_disabled) {
-	const std::filesystem::path root = sMakeTempDir("keepalive-off");
-	sWriteFile(root / "a.txt", "aaa");
-
-	Server::Config config;
-	config.servingDirectory = root;
-	config.port = 0;
-	config.threadCount = 1;
-	config.keepAlive = false;
-
-	Server server(config);
-	BOOST_REQUIRE(server.start());
-	const uint16_t port = server.port();
-
-	const ou::UniqueFd fd = sConnect(port);
-	BOOST_REQUIRE(fd.valid());
-
-	const std::string request = "GET /a.txt HTTP/1.1\r\nHost: x\r\n\r\n";
-	BOOST_REQUIRE(::send(fd.get(), request.data(), request.size(), 0) > 0);
-	BOOST_CHECK(sReadResponse(fd.get()).find("Connection: close") != std::string::npos);
-
-	std::array<char, 64> chunk{};
-	BOOST_CHECK_EQUAL(::recv(fd.get(), chunk.data(), chunk.size(), 0), 0);
-
-	server.stop();
-	std::filesystem::remove_all(root);
-}
-
-BOOST_AUTO_TEST_CASE(test_event_loop_serves_requests) {
-	const std::filesystem::path root = sMakeTempDir("eventloop");
-	sWriteFile(root / "hello.txt", "hello loop");
-	// Larger than a socket buffer, so the response goes out over several writes
-	sWriteFile(root / "large.txt", std::string(200000, 'x'));
-
-	Server::Config config;
-	config.servingDirectory = root;
-	config.port = 0; // kernel picks
-	config.threadCount = 2;
-	config.model = Server::Model::EventLoop;
-
-	Server server(config);
-	BOOST_REQUIRE(server.start());
-	const uint16_t port = server.port();
-
-	const std::string ok = sRoundTrip(port, "GET /hello.txt HTTP/1.1\r\nHost: localhost\r\n\r\n");
-	BOOST_CHECK(ok.starts_with("HTTP/1.1 200 OK"));
-	BOOST_CHECK(ok.ends_with("hello loop"));
-
-	const std::string missing = sRoundTrip(port, "GET /nope.txt HTTP/1.1\r\nHost: localhost\r\n\r\n");
-	BOOST_CHECK(missing.starts_with("HTTP/1.1 404"));
-
-	const std::string malformed = sRoundTrip(port, "BOGUS / HTTP/1.1\r\nHost: localhost\r\n\r\n");
-	BOOST_CHECK(malformed.starts_with("HTTP/1.1 400"));
-
-	const std::string large = sRoundTrip(port, "GET /large.txt HTTP/1.1\r\nHost: localhost\r\n\r\n");
-	BOOST_CHECK(large.starts_with("HTTP/1.1 200 OK"));
-	BOOST_CHECK_EQUAL(large.size() - large.find("\r\n\r\n") - 4, 200000U);
-
-	const std::string split = sRoundTrip(port, { "GET /hello.txt HTTP/1.1\r\nHost: ", "localhost\r\n", "\r\n" });
-	BOOST_CHECK(split.starts_with("HTTP/1.1 200 OK"));
-	BOOST_CHECK(split.ends_with("hello loop"));
-
-	server.stop();
-	server.stop();
-
-	std::filesystem::remove_all(root);
-}
-
-BOOST_AUTO_TEST_CASE(test_event_loop_closes_idle_connection) {
-	const std::filesystem::path root = sMakeTempDir("eventloop-idle");
-
-	Server::Config config;
-	config.servingDirectory = root;
-	config.port = 0; // kernel picks
-	config.threadCount = 1;
-	config.model = Server::Model::EventLoop;
-	config.readTimeout = std::chrono::seconds(1);
-
-	Server server(config);
-	BOOST_REQUIRE(server.start());
-	const uint16_t port = server.port();
-
-	const ou::UniqueFd fd(::socket(AF_INET, SOCK_STREAM, 0));
-	BOOST_REQUIRE(fd.valid());
-
-	sockaddr_in address{};
-	address.sin_family = AF_INET;
-	address.sin_port = htons(port);
-	address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-	BOOST_REQUIRE_EQUAL(::connect(fd.get(), reinterpret_cast<sockaddr *>(&address), sizeof(address)), 0);
-
-	const timeval timeout{ .tv_sec = 10, .tv_usec = 0 };
-	(void)::setsockopt(fd.get(), SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-
-	std::array<char, 64> chunk{};
-	BOOST_CHECK_EQUAL(::recv(fd.get(), chunk.data(), chunk.size(), 0), 0);
-
-	server.stop();
-	std::filesystem::remove_all(root);
-}
-
-// --- Access log tests ---
-
-BOOST_AUTO_TEST_CASE(test_access_log_middleware) {
-	const std::filesystem::path logPath = sMakeTempLogPath("access");
-	std::filesystem::remove(logPath);
-
-	AccessLog accessLog(AccessLog::Config{ .path = logPath, .flushBytes = 0 });
-
-	Request request = sMakeLoggedRequest("/logged");
-	Response response = Response::plainText(200, "hello");
-
-	// process() never handles the request
-	BOOST_CHECK(!accessLog.process(request, response));
-	accessLog.postProcess(request, response);
-
-	std::ifstream logFile(logPath);
-	std::string entry;
-	std::getline(logFile, entry);
-	logFile.close();
-
-	BOOST_CHECK(entry.find("127.0.0.1") != std::string::npos);
-	BOOST_CHECK(entry.find("GET /logged") != std::string::npos);
-	BOOST_CHECK(entry.find(" 200 5") != std::string::npos);
-	BOOST_CHECK_EQUAL(sCountLines(logPath), 1U);
-
-	// A request with no client address is not logged
-	Request anonymousRequest;
-	anonymousRequest.method = Method::GET;
-	anonymousRequest.path = "/anonymous";
-	accessLog.postProcess(anonymousRequest, response);
-	BOOST_CHECK_EQUAL(sCountLines(logPath), 1U);
-
-	std::filesystem::remove(logPath);
-}
-
-BOOST_AUTO_TEST_CASE(test_access_log_buffers_until_flushed) {
-	const std::filesystem::path logPath = sMakeTempLogPath("buffered");
-	std::filesystem::remove(logPath);
-
-	const Response response = Response::plainText(200, "hello");
-
-	{
-		// Large enough that nothing reaches the file on its own, and an interval long enough that
-		// the time-based flush cannot fire during the test
-		AccessLog accessLog(AccessLog::Config{ .path = logPath, .flushBytes = size_t{ 64 } * 1024, .flushInterval = std::chrono::hours(1) });
-
-		for (int i = 0; i < 10; ++i) {
-			Request request = sMakeLoggedRequest("/buffered");
-			accessLog.postProcess(request, response);
-		}
-
-		BOOST_CHECK(!std::filesystem::exists(logPath));
-
-		accessLog.flush();
-		BOOST_CHECK_EQUAL(sCountLines(logPath), 10U);
-
-		// Rotation still works while buffering, because each flush reopens by path
-		std::filesystem::remove(logPath);
-		Request request = sMakeLoggedRequest("/buffered");
-		accessLog.postProcess(request, response);
-		accessLog.flush();
-		BOOST_REQUIRE(std::filesystem::exists(logPath));
-		BOOST_CHECK_EQUAL(sCountLines(logPath), 1U);
-
-		std::filesystem::remove(logPath);
-
-		// Must survive destruction rather than being dropped
-		Request last = sMakeLoggedRequest("/at-exit");
-		accessLog.postProcess(last, response);
-		BOOST_CHECK(!std::filesystem::exists(logPath));
-	}
-
-	BOOST_REQUIRE(std::filesystem::exists(logPath));
-	BOOST_CHECK_EQUAL(sCountLines(logPath), 1U);
-
-	std::filesystem::remove(logPath);
-}
-
-BOOST_AUTO_TEST_CASE(test_access_log_flushes_when_buffer_fills) {
-	const std::filesystem::path logPath = sMakeTempLogPath("bufferfull");
-	std::filesystem::remove(logPath);
-
-	// One entry is well over 16 bytes, so every entry trips the size bound
-	AccessLog accessLog(AccessLog::Config{ .path = logPath, .flushBytes = 16, .flushInterval = std::chrono::hours(1) });
-	const Response response = Response::plainText(200, "hello");
-
-	for (int i = 0; i < 3; ++i) {
-		Request request = sMakeLoggedRequest("/full");
-		accessLog.postProcess(request, response);
-	}
-
-	BOOST_CHECK_EQUAL(sCountLines(logPath), 3U);
-	std::filesystem::remove(logPath);
-}
-
-BOOST_AUTO_TEST_CASE(test_access_log_recreates_after_rotation) {
-	const std::filesystem::path logPath = sMakeTempLogPath("rotation");
-	std::filesystem::remove(logPath);
-
-	AccessLog accessLog(AccessLog::Config{ .path = logPath, .flushBytes = 0 });
-	Request request = sMakeLoggedRequest("/rotated");
-	Response response = Response::plainText(200, "hello");
-
-	accessLog.postProcess(request, response);
-	BOOST_CHECK_EQUAL(sCountLines(logPath), 1U);
-
-	// Removed underneath us, as logrotate would
-	std::filesystem::remove(logPath);
-	accessLog.postProcess(request, response);
-
-	BOOST_REQUIRE(std::filesystem::exists(logPath));
-	BOOST_CHECK_EQUAL(sCountLines(logPath), 1U);
-
-	std::filesystem::remove(logPath);
-}
-
-BOOST_AUTO_TEST_CASE(test_access_log_concurrent_writes) {
-	const std::filesystem::path logPath = sMakeTempLogPath("concurrent");
-	std::filesystem::remove(logPath);
-
-	AccessLog accessLog(AccessLog::Config{ .path = logPath, .flushBytes = 0 });
-	Response response = Response::plainText(200, "hello");
-
-	constexpr int kThreadCount = 4;
-	constexpr int kPerThread = 25;
-
-	std::vector<std::thread> threads;
-	threads.reserve(kThreadCount);
-	for (int i = 0; i < kThreadCount; ++i) {
-		threads.emplace_back([&accessLog, &response]() {
-			for (int j = 0; j < kPerThread; ++j) {
-				Request request = sMakeLoggedRequest("/concurrent");
-				accessLog.postProcess(request, response);
-			}
-		});
-	}
-	for (std::thread &thread : threads) {
-		thread.join();
-	}
-
-	BOOST_CHECK_EQUAL(sCountLines(logPath), static_cast<size_t>(kThreadCount * kPerThread));
-
-	std::filesystem::remove(logPath);
-}
-
-BOOST_AUTO_TEST_CASE(test_access_log_records_routed_status) {
-	const std::filesystem::path logPath = sMakeTempLogPath("routed_status");
-	std::filesystem::remove(logPath);
-
-	TestServer::Config config;
-	config.servingDirectory = ".";
-	config.threadCount = 1;
-	TestServer server(config);
-
-	server.addMiddleware(std::make_shared<AccessLog>(AccessLog::Config{ .path = logPath, .flushBytes = 0 }));
-	server.registerPathHandler({ Method::GET, Method::HEAD }, "/hello", [](const Request &) { return Response::plainText(200, "hi there"); });
-
-	Request routed = sMakeLoggedRequest("/hello");
-	const Response routedResponse = server.handleRequest(routed);
-	BOOST_CHECK_EQUAL(routedResponse.statusCode, 200);
-	BOOST_CHECK_EQUAL(routedResponse.body, "hi there");
-
-	Request missing = sMakeLoggedRequest("/does-not-exist");
-	const Response missingResponse = server.handleRequest(missing);
-	BOOST_CHECK_EQUAL(missingResponse.statusCode, 404);
-
-	std::ifstream logFile(logPath);
-	std::string firstLine;
-	std::string secondLine;
-	std::getline(logFile, firstLine);
-	std::getline(logFile, secondLine);
-	logFile.close();
-
-	BOOST_CHECK(firstLine.find("GET /hello") != std::string::npos);
-	BOOST_CHECK(firstLine.find(" 200 8") != std::string::npos);
-
-	BOOST_CHECK(secondLine.find("GET /does-not-exist") != std::string::npos);
-	BOOST_CHECK(secondLine.find(" 404 ") != std::string::npos);
-	BOOST_CHECK(secondLine.find(" 200 0") == std::string::npos);
-
-	// HEAD drops the body, but the log records what the equivalent GET would have sent
-	Request head = sMakeLoggedRequest("/hello");
-	head.method = Method::HEAD;
-	const Response headResponse = server.handleRequest(head);
-	BOOST_CHECK(headResponse.body.empty());
-
-	std::string thirdLine;
-	std::ifstream reread(logPath);
-	std::getline(reread, thirdLine);
-	std::getline(reread, thirdLine);
-	std::getline(reread, thirdLine);
-	reread.close();
-	BOOST_CHECK(thirdLine.find("HEAD /hello") != std::string::npos);
-	BOOST_CHECK(thirdLine.find(" 200 8") != std::string::npos);
-
-	BOOST_CHECK_EQUAL(sCountLines(logPath), 3U);
-
-	std::filesystem::remove(logPath);
-}

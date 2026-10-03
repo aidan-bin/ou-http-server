@@ -56,9 +56,13 @@ RequestReader::Status RequestReader::parseBuffered() {
 		if (request_->header("Transfer-Encoding"))
 			return reject(501);
 
-		totalSize_ = bodyStart_ + request_->contentLength().value_or(0);
-		if (totalSize_ > maxRequestBytes_)
+		const std::optional<size_t> contentLength = request_->contentLength();
+		if (!contentLength && request_->header("Content-Length"))
+			return reject(400);
+
+		if (contentLength.value_or(0) > maxRequestBytes_ - bodyStart_)
 			return reject(413);
+		totalSize_ = bodyStart_ + contentLength.value_or(0);
 	}
 
 	return raw_.size() < totalSize_ ? Status::NeedMore : Status::Complete;
