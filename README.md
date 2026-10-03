@@ -1,6 +1,6 @@
-# Toy HTTP Server
+# ou HTTP Server
 
-This is a toy HTTP server implemented in C++ using modern STL features.
+An HTTP server implemented in C++ using modern STL features.
 
 Unit tests (using Boost.Test) are included, along with a sample driver program.
 
@@ -65,7 +65,7 @@ mkdir build && cd build
 cmake ..
 
 make
-./toy_http_server
+./ou_http_server
 
 ctest --verbose
 ```
@@ -77,7 +77,7 @@ docker-compose up --build
 
 docker-compose run server ./server.py test
 
-docker exec -it toy_http_server bash
+docker exec -it ou_http_server bash
 
 docker-compose down
 ```

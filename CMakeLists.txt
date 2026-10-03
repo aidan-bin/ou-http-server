@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(toy_http_server)
+project(ou_http_server)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -32,8 +32,8 @@ add_library(http_lib ${HTTP_LIB_SOURCES})
 target_link_libraries(http_lib PRIVATE pthread ${SSL_LIBS})
 target_include_directories(http_lib PUBLIC ${CMAKE_SOURCE_DIR}/src)
 
-add_executable(toy_http_server src/main.cpp)
-target_link_libraries(toy_http_server PRIVATE http_lib ${SSL_LIBS})
+add_executable(ou_http_server src/main.cpp)
+target_link_libraries(ou_http_server PRIVATE http_lib ${SSL_LIBS})
 
 find_program(CLANG_TIDY_EXECUTABLE NAMES clang-tidy)
 

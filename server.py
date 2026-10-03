@@ -9,7 +9,7 @@ import sys
 import time
 
 BUILD_DIR = "build"
-DOCKER_IMAGE = "toy_http_server_image"
+DOCKER_IMAGE = "ou_http_server_image"
 
 def run_command(cmd, cwd=None):
 	print(f"Running command: {' '.join(cmd)}")
@@ -30,7 +30,7 @@ def build(disable_https):
 	run_command(["make"], cwd=BUILD_DIR)
 
 def run_main(event_loop):
-	exe_path = os.path.join(BUILD_DIR, "toy_http_server")
+	exe_path = os.path.join(BUILD_DIR, "ou_http_server")
 	if not os.path.isfile(exe_path):
 		print("Executable not found. Please build first.")
 		sys.exit(1)
@@ -104,8 +104,8 @@ def bench(args):
 
 	bench_dir = os.path.join(BUILD_DIR, f"bench-{platform.system().lower()}")
 	run_command(["cmake", "-S", ".", "-B", bench_dir, "-DCMAKE_BUILD_TYPE=RelWithDebInfo", "-DDISABLE_HTTPS=ON"])
-	run_command(["cmake", "--build", bench_dir, "--target", "toy_http_server", "-j", str(os.cpu_count())])
-	exe = os.path.join(bench_dir, "toy_http_server")
+	run_command(["cmake", "--build", bench_dir, "--target", "ou_http_server", "-j", str(os.cpu_count())])
+	exe = os.path.join(bench_dir, "ou_http_server")
 
 	# Too few wrk threads leaves connections idle, which the event loop reports as latency
 	if args.conns / args.threads > 12:
@@ -124,7 +124,7 @@ def bench(args):
 def main():
 	sys.stdout.reconfigure(line_buffering=True)
 	parser = argparse.ArgumentParser(
-		description="Build, run, and test the toy HTTP server (local or Docker)."
+		description="Build, run, and test the ou HTTP server (local or Docker)."
 	)
 	subparsers = parser.add_subparsers(dest="command", help="sub-command help")
 

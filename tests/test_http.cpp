@@ -1,4 +1,4 @@
-#define BOOST_TEST_MODULE ToyHttpServerTest
+#define BOOST_TEST_MODULE OuHttpServerTest
 #include <boost/test/included/unit_test.hpp>
 
 #include "AccessLog.h"
@@ -257,7 +257,7 @@ BOOST_AUTO_TEST_CASE(test_multi_method_registration) {
 namespace {
 
 std::filesystem::path sMakeTempDir(const std::string &name) {
-	const std::filesystem::path dir = std::filesystem::temp_directory_path() / ("toy_http_server_test_" + name);
+	const std::filesystem::path dir = std::filesystem::temp_directory_path() / ("ou_http_server_test_" + name);
 	std::filesystem::remove_all(dir);
 	std::filesystem::create_directories(dir);
 	return dir;
@@ -269,7 +269,7 @@ void sWriteFile(const std::filesystem::path &path, std::string_view content) {
 }
 
 std::filesystem::path sMakeTempLogPath(const std::string &name) {
-	return std::filesystem::temp_directory_path() / ("toy_http_server_test_" + name + ".log");
+	return std::filesystem::temp_directory_path() / ("ou_http_server_test_" + name + ".log");
 }
 
 Request sMakeLoggedRequest(const std::string &path) {
@@ -333,24 +333,24 @@ BOOST_AUTO_TEST_CASE(test_static_file_serving_and_mime_types) {
 BOOST_AUTO_TEST_CASE(test_directory_traversal_is_rejected) {
 	const std::filesystem::path root = sMakeTempDir("traversal");
 	sWriteFile(root / "public.txt", "public");
-	sWriteFile(root.parent_path() / "toy_http_server_test_secret.txt", "secret");
+	sWriteFile(root.parent_path() / "ou_http_server_test_secret.txt", "secret");
 
 	TestServer::Config config;
 	config.servingDirectory = root;
 	TestServer server(config);
 
 	BOOST_CHECK_EQUAL(server.handleStaticFileRequest(sMakeGet("/public.txt")).statusCode, 200);
-	BOOST_CHECK_EQUAL(server.handleStaticFileRequest(sMakeGet("/../toy_http_server_test_secret.txt")).statusCode, 403);
+	BOOST_CHECK_EQUAL(server.handleStaticFileRequest(sMakeGet("/../ou_http_server_test_secret.txt")).statusCode, 403);
 	BOOST_CHECK_EQUAL(server.handleStaticFileRequest(sMakeGet("/../../etc/passwd")).statusCode, 403);
 	BOOST_CHECK_EQUAL(server.handleStaticFileRequest(sMakeGet("/subdir/../../etc/passwd")).statusCode, 403);
 
 	// Encoded form decodes to the same traversal
-	const std::optional<Request> encoded = Request::parse("GET /..%2Ftoy_http_server_test_secret.txt HTTP/1.1\r\n\r\n");
+	const std::optional<Request> encoded = Request::parse("GET /..%2Fou_http_server_test_secret.txt HTTP/1.1\r\n\r\n");
 	BOOST_REQUIRE(encoded.has_value());
 	BOOST_CHECK_EQUAL(server.handleStaticFileRequest(encoded.value()).statusCode, 403);
 
 	std::filesystem::remove_all(root);
-	std::filesystem::remove(root.parent_path() / "toy_http_server_test_secret.txt");
+	std::filesystem::remove(root.parent_path() / "ou_http_server_test_secret.txt");
 }
 
 BOOST_AUTO_TEST_CASE(test_directory_indexing_escapes_names) {

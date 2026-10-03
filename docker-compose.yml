@@ -3,7 +3,7 @@ version: "3.8"
 services:
   server:
     build: .
-    container_name: toy_http_server
+    container_name: ou_http_server
     volumes:
       - .:/app  # Mount project directory into the container
     working_dir: /app
