@@ -13,6 +13,8 @@
 
 namespace ou::http {
 
+// --- Methods ---
+
 enum class Method : uint8_t { GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS, CONNECT, TRACE };
 
 inline constexpr std::array<std::pair<std::string_view, Method>, 9> kMethodNames{ {
@@ -45,6 +47,12 @@ inline constexpr std::array<std::pair<std::string_view, Method>, 9> kMethodNames
 
 std::ostream &operator<<(std::ostream &os, Method method);
 
+// --- Strings ---
+
+[[nodiscard]] bool equalsIgnoreCase(std::string_view lhs, std::string_view rhs) noexcept;
+
+[[nodiscard]] std::string_view trim(std::string_view str);
+
 struct CaseInsensitiveLess {
 	using is_transparent = void;
 	[[nodiscard]] bool operator()(std::string_view lhs, std::string_view rhs) const noexcept;
@@ -53,9 +61,7 @@ struct CaseInsensitiveLess {
 // HTTP field names are case-insensitive
 using Headers = std::map<std::string, std::string, CaseInsensitiveLess>;
 
-[[nodiscard]] bool equalsIgnoreCase(std::string_view lhs, std::string_view rhs) noexcept;
-
-[[nodiscard]] std::string_view trim(std::string_view str);
+// --- URLs ---
 
 // Decodes %XX escapes; invalid escapes are left verbatim. '+' means space only in query/form data
 [[nodiscard]] std::string percentDecode(std::string_view input, bool plusAsSpace = true);
@@ -63,11 +69,10 @@ using Headers = std::map<std::string, std::string, CaseInsensitiveLess>;
 // Escapes everything outside the unreserved set, leaving '/' intact so a path stays a path
 [[nodiscard]] std::string percentEncode(std::string_view input);
 
-// inet_ntoa returns a shared static buffer, so worker threads need this instead
-[[nodiscard]] std::string addressToString(const sockaddr_in &address);
-
 // Splits "a=1&b=2" and percent-decodes each name and value; later duplicates win
 [[nodiscard]] std::map<std::string, std::string> parseQuery(std::string_view query);
+
+// --- Status codes ---
 
 [[nodiscard]] constexpr std::string_view defaultReasonPhrase(int statusCode) {
 	switch (statusCode) {
@@ -98,6 +103,13 @@ using Headers = std::map<std::string, std::string, CaseInsensitiveLess>;
 	}
 }
 
+// --- Sockets ---
+
+// inet_ntoa returns a shared static buffer, so worker threads need this instead
+[[nodiscard]] std::string addressToString(const sockaddr_in &address);
+
+// --- Messages ---
+
 struct Request {
 	Method method{ Method::GET };
 	bool http10 = false;
@@ -114,9 +126,6 @@ struct Request {
 
 	// HTTP/1.1 keeps the connection open unless asked not to
 	[[nodiscard]] bool wantsKeepAlive() const;
-
-private:
-	static std::pair<std::string_view, std::string_view> split_at(std::string_view str, char delimiter);
 };
 
 struct Response {

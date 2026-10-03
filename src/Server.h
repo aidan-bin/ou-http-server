@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ConnectionLoop.h"
 #include "HttpTypes.h"
 #include "SSLSocketHandler.h"
 #include "SocketHandler.h"
@@ -18,12 +19,9 @@
 #include <string>
 #include <thread>
 #include <utility>
-#include <variant>
 #include <vector>
 
 namespace ou::http {
-
-class RequestReader;
 
 class Middleware {
 public:
@@ -34,11 +32,10 @@ public:
 	Middleware &operator=(Middleware &&) = delete;
 	virtual ~Middleware() = default;
 
-	// Return true if the middleware handled the request, optionally modify request, and set response.
-	// The default observes without handling, which is all a postProcess-only middleware needs.
+	// Runs before routing. Return true to answer with `response` and skip routing; may modify `request`
 	virtual bool process(Request & /*request*/, Response & /*response*/) { return false; }
 
-	// Called after routing, with the final response
+	// Runs after every request (including short-circuited and rejected ones)
 	virtual void postProcess(const Request & /*request*/, const Response & /*response*/) {}
 };
 
@@ -77,8 +74,12 @@ public:
 	[[nodiscard]] bool start();
 	void stop();
 
+	// The bound port; valid after start()
+	[[nodiscard]] uint16_t port() const noexcept { return port_; }
+
 	void addMiddleware(std::shared_ptr<Middleware> middleware);
 
+	// Re-registering an exact path replaces its handler; patterns accumulate and the first match wins
 	void registerPathHandler(Method method, const std::string &path, Handler handler);
 	void registerPatternHandler(Method method, const std::string &pattern, Handler handler);
 	void registerPathHandler(std::initializer_list<Method> methods, const std::string &path, const Handler &handler);
@@ -99,18 +100,14 @@ private:
 		Handler handler;
 	};
 
-	void workerThread(int serverSocket);
-	void eventLoopThread(int serverSocket);
+	void runLoop();
 
+	// Wraps handleRequest with what needs the connection (client address, keep-alive, and the log line)
 	[[nodiscard]] Response serve(Request request, const sockaddr_in &clientAddr) const;
-
-	// Model::ThreadPerCore logic
-	void handleConnection(int clientSocket, const sockaddr_in &clientAddr) const; // Never throws, and never closes the socket
-	// Reads the next complete request, or the status to answer with instead (0 = close silently)
-	[[nodiscard]] std::variant<Request, int> readRequest(int clientSocket, RequestReader &reader) const;
 
 	Config config_;
 	std::filesystem::path servingRoot_;
+	uint16_t port_ = 0;
 	std::atomic<bool> running_{ false };
 	std::vector<std::thread> threads_;
 	UniqueFd listenSocket_; // Shared by every worker thread

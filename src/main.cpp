@@ -1,3 +1,5 @@
+// Demo driver: serves ./example/www with an access log and a /kv store
+
 #include "AccessLog.h"
 #include "KVStore.h"
 #include "Logging.h"
@@ -67,8 +69,7 @@ int main(int argc, char **argv) {
 
 	(void)std::signal(SIGINT, sSignalHandler);
 	(void)std::signal(SIGTERM, sSignalHandler);
-	// A peer that disconnects mid-write would otherwise kill the process
-	(void)std::signal(SIGPIPE, SIG_IGN);
+	(void)std::signal(SIGPIPE, SIG_IGN); // A peer that disconnects mid-write would otherwise kill the process
 
 	try {
 		return runServer(useEventLoop);

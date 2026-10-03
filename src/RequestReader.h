@@ -19,14 +19,16 @@ public:
 
 	explicit RequestReader(size_t maxRequestBytes) : maxRequestBytes_(maxRequestBytes) {}
 
+	// Appends what was just read and re-evaluates the request's status
 	Status consume(std::string_view bytes);
 
-	[[nodiscard]] bool empty() const noexcept { return raw_.empty(); }
+	// The peer stopped sending: a clean close between requests, or a 408 mid-request
+	Status abandon() noexcept;
 
-	// Only meaningful after Rejected
+	// The status code to answer with; only meaningful after Rejected
 	[[nodiscard]] int rejectStatus() const noexcept { return rejectStatus_; }
 
-	// Only valid after Complete
+	// Moves the request out, leaving any bytes after it buffered for reset(); only valid after Complete
 	[[nodiscard]] Request take();
 
 	// Drops the finished request and reports on whatever followed it
@@ -39,7 +41,7 @@ private:
 
 	size_t maxRequestBytes_;
 	std::string raw_;
-	size_t headerEnd_ = std::string::npos;
+	size_t bodyStart_ = std::string::npos;
 	size_t totalSize_ = 0;
 	int rejectStatus_ = 400;
 	std::optional<Request> request_;

@@ -5,6 +5,12 @@
 
 namespace ou::http {
 
+namespace {
+
+	constexpr std::string_view kHeaderTerminator = "\r\n\r\n";
+
+} // namespace
+
 RequestReader::Status RequestReader::reject(int status) noexcept {
 	rejectStatus_ = status;
 	return Status::Rejected;
@@ -15,10 +21,12 @@ RequestReader::Status RequestReader::consume(std::string_view bytes) {
 	return parseBuffered();
 }
 
+RequestReader::Status RequestReader::abandon() noexcept { return raw_.empty() ? Status::NeedMore : reject(408); }
+
 RequestReader::Status RequestReader::reset() {
-	// Anything past the finished request is the start of the next one
+	// Keep any pipelined bytes after the finished request and parse them now
 	raw_.erase(0, std::min(totalSize_, raw_.size()));
-	headerEnd_ = std::string::npos;
+	bodyStart_ = std::string::npos;
 	totalSize_ = 0;
 	request_.reset();
 
@@ -32,10 +40,11 @@ RequestReader::Status RequestReader::parseBuffered() {
 	if (raw_.size() > maxRequestBytes_)
 		return reject(413);
 
-	if (headerEnd_ == std::string::npos) {
-		headerEnd_ = raw_.find("\r\n\r\n");
-		if (headerEnd_ == std::string::npos)
+	if (bodyStart_ == std::string::npos) {
+		const size_t headerEnd = raw_.find(kHeaderTerminator);
+		if (headerEnd == std::string::npos)
 			return Status::NeedMore;
+		bodyStart_ = headerEnd + kHeaderTerminator.size();
 	}
 
 	if (!request_) {
@@ -43,10 +52,11 @@ RequestReader::Status RequestReader::parseBuffered() {
 		if (!request_)
 			return reject(400);
 
+		// Chunked bodies aren't supported
 		if (request_->header("Transfer-Encoding"))
 			return reject(501);
 
-		totalSize_ = headerEnd_ + 4 + request_->contentLength().value_or(0);
+		totalSize_ = bodyStart_ + request_->contentLength().value_or(0);
 		if (totalSize_ > maxRequestBytes_)
 			return reject(413);
 	}
@@ -58,9 +68,8 @@ Request RequestReader::take() {
 	if (!request_)
 		return {};
 
-	// Truncate any bytes past Content-Length that arrived in the same read
-	const size_t bodyStart = headerEnd_ + 4;
-	request_->body.assign(raw_, bodyStart, totalSize_ - bodyStart);
+	// Whatever follows the body (given by Content-Length) stays in raw_ for reset()
+	request_->body.assign(raw_, bodyStart_, totalSize_ - bodyStart_);
 
 	return std::move(*request_);
 }

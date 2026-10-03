@@ -1,7 +1,7 @@
 #include "Server.h"
+#include "BlockingLoop.h"
 #include "EventLoop.h"
 #include "Logging.h"
-#include "RequestReader.h"
 
 #include <algorithm>
 #include <array>
@@ -11,14 +11,9 @@
 #include <utility>
 
 #include <netinet/in.h>
-#include <poll.h>
 #include <sys/socket.h>
-#include <unistd.h>
 
 namespace {
-
-constexpr int kAcceptPollMs = 200;
-constexpr auto kAcceptRetryDelay = std::chrono::milliseconds(10);
 
 constexpr std::array<std::pair<std::string_view, std::string_view>, 14> kMimeTypes{ {
 		{ ".html", "text/html" },
@@ -46,6 +41,7 @@ std::string_view sMimeTypeFor(const std::filesystem::path &path) {
 	return "application/octet-stream";
 }
 
+// Compares whole path components (e.g., so /srv/www2 is not inside /srv/www)
 bool sIsWithin(const std::filesystem::path &candidate, const std::filesystem::path &root) {
 	const auto mismatched = std::ranges::mismatch(root, candidate);
 	return mismatched.in1 == root.end();
@@ -81,6 +77,7 @@ std::string sHtmlEscape(std::string_view text) {
 	return escaped;
 }
 
+// A bare <ul> of links for a directory's contents, with a link to the parent if not at the root
 std::string sGenerateDirectoryIndex(const std::string &requestPath, const std::filesystem::path &dirPath, std::error_code &ec) {
 	const std::string escapedPath = sHtmlEscape(requestPath);
 	std::string html
@@ -91,6 +88,7 @@ std::string sGenerateDirectoryIndex(const std::string &requestPath, const std::f
 		normalizedPath += '/';
 
 	if (requestPath != "/") {
+		// "/a/b/" -> "/a/"
 		const std::string parentPath = normalizedPath.substr(0, normalizedPath.find_last_of('/', normalizedPath.length() - 2) + 1);
 		html += std::format("<li><a href=\"{}\">..</a></li>", ou::http::percentEncode(parentPath));
 	}
@@ -105,35 +103,6 @@ std::string sGenerateDirectoryIndex(const std::string &requestPath, const std::f
 
 	html += "</ul></body></html>";
 	return html;
-}
-
-int sAcceptOne(int serverSocket, sockaddr_in &clientAddr) {
-	pollfd descriptor{ .fd = serverSocket, .events = POLLIN, .revents = 0 };
-
-	const int ready = ::poll(&descriptor, 1, kAcceptPollMs);
-	if (ready == 0) {
-		return -1;
-	}
-
-	if (ready < 0) {
-		if (errno != EINTR)
-			std::this_thread::sleep_for(kAcceptRetryDelay);
-		return -1;
-	}
-
-	socklen_t clientLen = sizeof(clientAddr);
-	const int clientSocket = accept(serverSocket, reinterpret_cast<struct sockaddr *>(&clientAddr), &clientLen);
-	if (clientSocket < 0) {
-		if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK || errno == ECONNABORTED)
-			return -1;
-
-		LOG_WARN("Failed to accept connection: errno {}", errno);
-		std::this_thread::sleep_for(kAcceptRetryDelay);
-		return -1;
-	}
-
-	(void)ou::setNonBlocking(clientSocket, false);
-	return clientSocket;
 }
 
 } // namespace
@@ -152,7 +121,7 @@ Server::Server(Config config) : config_(std::move(config)) {
 Server::~Server() { stop(); }
 
 bool Server::start() {
-	LOG_INFO("Starting server on port {} with {} threads...", config_.port, config_.threadCount);
+	LOG_INFO("Starting server with {} threads...", config_.threadCount);
 
 	try {
 #ifndef DISABLE_HTTPS
@@ -174,8 +143,9 @@ bool Server::start() {
 		return false;
 	}
 
-	const int opt = 1;
-	if (setsockopt(serverSocket.get(), SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+	// Lets a restarted server rebind while the old socket's connections sit in TIME_WAIT
+	const int enable = 1;
+	if (setsockopt(serverSocket.get(), SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(enable)) < 0) {
 		LOG_ERROR("Failed to set SO_REUSEADDR");
 		return false;
 	}
@@ -201,17 +171,20 @@ bool Server::start() {
 		return false;
 	}
 
-	LOG_INFO("Server socket {} bound and listening...", serverSocket.get());
+	sockaddr_in bound{};
+	socklen_t boundLength = sizeof(bound);
+	if (getsockname(serverSocket.get(), reinterpret_cast<struct sockaddr *>(&bound), &boundLength) < 0) {
+		LOG_ERROR("Failed to read the bound port");
+		return false;
+	}
+	port_ = ntohs(bound.sin_port);
+
+	LOG_INFO("Server socket {} bound and listening on port {}...", serverSocket.get(), port_);
 	listenSocket_ = std::move(serverSocket);
 
 	running_.store(true);
 	for (unsigned i = 0; i < config_.threadCount; ++i) {
-		threads_.emplace_back([this, fd = listenSocket_.get()]() {
-			if (config_.model == Model::EventLoop)
-				eventLoopThread(fd);
-			else
-				workerThread(fd);
-		});
+		threads_.emplace_back([this]() { runLoop(); });
 	}
 	return true;
 }
@@ -236,7 +209,6 @@ void Server::stop() {
 void Server::addMiddleware(std::shared_ptr<Middleware> middleware) { middlewares_.push_back(std::move(middleware)); }
 
 void Server::registerPathHandler(Method method, const std::string &path, Handler handler) {
-	// Re-registering an exact path replaces the handler; patterns accumulate and first match wins
 	pathHandlers_[{ method, path }] = std::move(handler);
 }
 
@@ -256,84 +228,25 @@ void Server::registerPatternHandler(std::initializer_list<Method> methods, const
 	}
 }
 
-std::variant<Request, int> Server::readRequest(int clientSocket, RequestReader &reader) const {
-	std::array<char, RequestReader::kChunkBytes> chunk{};
+void Server::runLoop() {
+	const LoopConfig config{ .listenSocket = listenSocket_.get(),
+													 .maxRequestBytes = config_.maxRequestBytes,
+													 .idleTimeout = config_.readTimeout };
 
-	RequestReader::Status status = reader.reset();
+	const Dispatch dispatch = [this](Request request, const sockaddr_in &clientAddr) {
+		return serve(std::move(request), clientAddr);
+	};
+	const Reject reject = [this](int status, const sockaddr_in &clientAddr) {
+		return rejectRequest(status, clientAddr);
+	};
 
-	while (status == RequestReader::Status::NeedMore) {
-		const IoResult result = socketHandler_->read(clientSocket, chunk);
-		if (result.status != IoStatus::Ok) {
-			// Timed out or the peer went away; an idle keep-alive connection lands here with nothing
-			// buffered and is closed without an answer
-			return reader.empty() ? 0 : 408;
-		}
-
-		status = reader.consume({ chunk.data(), result.bytes });
-	}
-
-	if (status == RequestReader::Status::Rejected)
-		return reader.rejectStatus();
-
-	return reader.take();
-}
-
-void Server::handleConnection(int clientSocket, const sockaddr_in &clientAddr) const {
-	const timeval timeout{ .tv_sec = static_cast<time_t>(config_.readTimeout.count()), .tv_usec = 0 };
-	(void)setsockopt(clientSocket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-	(void)setsockopt(clientSocket, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
-
-	if (socketHandler_->acceptConnection(clientSocket).status != IoStatus::Ok)
+	if (config_.model == Model::EventLoop) {
+		EventLoop loop(config, *socketHandler_, dispatch, reject);
+		loop.run(running_);
 		return;
-
-	RequestReader reader(config_.maxRequestBytes);
-
-	while (running_.load()) {
-		std::variant<Request, int> result = readRequest(clientSocket, reader);
-
-		if (const int *status = std::get_if<int>(&result)) {
-			if (*status != 0)
-				(void)socketHandler_->writeAll(clientSocket, rejectRequest(*status, clientAddr).serialize());
-
-			return;
-		}
-
-		const Response response = serve(std::move(std::get<Request>(result)), clientAddr);
-
-		if (socketHandler_->writeAll(clientSocket, response.serialize()).status != IoStatus::Ok || !response.keepAlive)
-			return;
 	}
-}
 
-void Server::workerThread(int serverSocket) {
-	while (running_.load()) {
-		sockaddr_in clientAddr{};
-
-		const int clientSocket = sAcceptOne(serverSocket, clientAddr);
-		if (clientSocket < 0)
-			continue;
-
-		try {
-			handleConnection(clientSocket, clientAddr);
-		} catch (const std::exception &e) {
-			LOG_ERROR("Unhandled exception while serving client: {}", e.what());
-		} catch (...) {
-			LOG_ERROR("Unhandled exception of unknown type while serving client");
-		}
-
-		socketHandler_->closeConnection(clientSocket);
-	}
-}
-
-void Server::eventLoopThread(int serverSocket) {
-	const EventLoop::Config config{ .listenSocket = serverSocket,
-																	.maxRequestBytes = config_.maxRequestBytes,
-																	.idleTimeout = config_.readTimeout };
-
-	// Pass control to event loop logic; delegates request handling to Server
-	EventLoop loop(
-			config, *socketHandler_, [this](Request request, const sockaddr_in &clientAddr) { return serve(std::move(request), clientAddr); },
-			[this](int status, const sockaddr_in &clientAddr) { return rejectRequest(status, clientAddr); });
+	BlockingLoop loop(config, *socketHandler_, dispatch, reject);
 	loop.run(running_);
 }
 

@@ -567,26 +567,27 @@ BOOST_AUTO_TEST_CASE(test_server_round_trip_over_a_real_socket) {
 
 	Server::Config config;
 	config.servingDirectory = root;
-	config.port = 18173;
+	config.port = 0; // kernel picks
 	config.threadCount = 2;
 
 	Server server(config);
 	BOOST_REQUIRE(server.start());
+	const uint16_t port = server.port();
 
-	const std::string ok = sRoundTrip(config.port, "GET /hello.txt HTTP/1.1\r\nHost: localhost\r\n\r\n");
+	const std::string ok = sRoundTrip(port, "GET /hello.txt HTTP/1.1\r\nHost: localhost\r\n\r\n");
 	BOOST_CHECK(ok.starts_with("HTTP/1.1 200 OK"));
 	BOOST_CHECK(ok.ends_with("hello socket"));
 
-	const std::string head = sRoundTrip(config.port, "HEAD /hello.txt HTTP/1.1\r\nHost: localhost\r\n\r\n");
+	const std::string head = sRoundTrip(port, "HEAD /hello.txt HTTP/1.1\r\nHost: localhost\r\n\r\n");
 	BOOST_CHECK(head.starts_with("HTTP/1.1 200 OK"));
 	BOOST_CHECK(head.ends_with("\r\n\r\n"));
 	BOOST_CHECK(head.find("Content-Length: 0\r\n") != std::string::npos);
 
 	const std::string chunked
-			= sRoundTrip(config.port, "POST /hello.txt HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n");
+			= sRoundTrip(port, "POST /hello.txt HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n");
 	BOOST_CHECK(chunked.starts_with("HTTP/1.1 501"));
 
-	const std::string badVersion = sRoundTrip(config.port, "GET /hello.txt HTTP/2.0\r\nHost: localhost\r\n\r\n");
+	const std::string badVersion = sRoundTrip(port, "GET /hello.txt HTTP/2.0\r\nHost: localhost\r\n\r\n");
 	BOOST_CHECK(badVersion.starts_with("HTTP/1.1 400"));
 
 	// Must return rather than deadlock, and must tolerate the second call ~Server makes
@@ -608,9 +609,12 @@ BOOST_AUTO_TEST_CASE(test_request_reader_carries_pipelined_bytes) {
 	BOOST_REQUIRE(reader.reset() == RequestReader::Status::Complete);
 	BOOST_CHECK_EQUAL(reader.take().path, "/b");
 
-	// Nothing left, so the next round has to wait for the socket
 	BOOST_CHECK(reader.reset() == RequestReader::Status::NeedMore);
-	BOOST_CHECK(reader.empty());
+	BOOST_CHECK(reader.abandon() == RequestReader::Status::NeedMore);
+
+	BOOST_REQUIRE(reader.consume("GET /c HTTP/1.1\r\nHost: ") == RequestReader::Status::NeedMore);
+	BOOST_CHECK(reader.abandon() == RequestReader::Status::Rejected);
+	BOOST_CHECK_EQUAL(reader.rejectStatus(), 408);
 }
 
 BOOST_AUTO_TEST_CASE(test_request_reader_body_does_not_absorb_next_request) {
@@ -652,19 +656,20 @@ BOOST_AUTO_TEST_CASE(test_keep_alive_defaults_by_version) {
 namespace {
 
 // Both concurrency models must behave identically here, so each case runs against both
-void sCheckKeepAlive(Server::Model model, uint16_t port) {
+void sCheckKeepAlive(Server::Model model) {
 	const std::filesystem::path root = sMakeTempDir("keepalive");
 	sWriteFile(root / "a.txt", "aaa");
 	sWriteFile(root / "b.txt", "bbbb");
 
 	Server::Config config;
 	config.servingDirectory = root;
-	config.port = port;
+	config.port = 0; // kernel picks
 	config.threadCount = 2;
 	config.model = model;
 
 	Server server(config);
 	BOOST_REQUIRE(server.start());
+	const uint16_t port = server.port();
 
 	{ // Two requests down one connection
 		const ou::UniqueFd fd = sConnect(port);
@@ -791,13 +796,13 @@ void sCheckConcurrentTlsSessions(uint16_t port) {
 }
 
 // The event-loop handshake is resumable across wakeups, which nothing else exercises
-void sCheckTls(Server::Model model, uint16_t port) {
+void sCheckTls(Server::Model model) {
 	const std::filesystem::path root = sMakeTempDir("tls");
 	sWriteFile(root / "a.txt", "over tls");
 
 	Server::Config config;
 	config.servingDirectory = root;
-	config.port = port;
+	config.port = 0; // kernel picks
 	config.threadCount = 2;
 	config.model = model;
 	config.https = { .enabled = true,
@@ -806,6 +811,7 @@ void sCheckTls(Server::Model model, uint16_t port) {
 
 	Server server(config);
 	BOOST_REQUIRE(server.start());
+	const uint16_t port = server.port();
 
 	{ // Handshake, then a request
 		TlsClient client(port);
@@ -839,29 +845,30 @@ void sCheckTls(Server::Model model, uint16_t port) {
 
 } // namespace
 
-BOOST_AUTO_TEST_CASE(test_tls_thread_per_core) { sCheckTls(Server::Model::ThreadPerCore, 18180); }
+BOOST_AUTO_TEST_CASE(test_tls_thread_per_core) { sCheckTls(Server::Model::ThreadPerCore); }
 
-BOOST_AUTO_TEST_CASE(test_tls_event_loop) { sCheckTls(Server::Model::EventLoop, 18181); }
+BOOST_AUTO_TEST_CASE(test_tls_event_loop) { sCheckTls(Server::Model::EventLoop); }
 
 #endif // DISABLE_HTTPS
 
 namespace {
 
 // A request that never parses returns before any Request exists, so it used to leave no trace
-void sCheckRejectionIsLogged(Server::Model model, uint16_t port) {
+void sCheckRejectionIsLogged(Server::Model model) {
 	const std::filesystem::path root = sMakeTempDir("rejectlog");
 	const std::filesystem::path logPath = sMakeTempLogPath("rejected");
 	std::filesystem::remove(logPath);
 
 	Server::Config config;
 	config.servingDirectory = root;
-	config.port = port;
+	config.port = 0; // kernel picks
 	config.threadCount = 1;
 	config.model = model;
 
 	Server server(config);
 	server.addMiddleware(std::make_shared<AccessLog>(AccessLog::Config{ .path = logPath, .flushBytes = 0 }));
 	BOOST_REQUIRE(server.start());
+	const uint16_t port = server.port();
 
 	const std::string response = sRoundTrip(port, "BOGUS / HTTP/1.1\r\nHost: x\r\n\r\n");
 	BOOST_CHECK(response.starts_with("HTTP/1.1 400"));
@@ -882,13 +889,13 @@ void sCheckRejectionIsLogged(Server::Model model, uint16_t port) {
 
 } // namespace
 
-BOOST_AUTO_TEST_CASE(test_rejection_is_logged_thread_per_core) { sCheckRejectionIsLogged(Server::Model::ThreadPerCore, 18182); }
+BOOST_AUTO_TEST_CASE(test_rejection_is_logged_thread_per_core) { sCheckRejectionIsLogged(Server::Model::ThreadPerCore); }
 
-BOOST_AUTO_TEST_CASE(test_rejection_is_logged_event_loop) { sCheckRejectionIsLogged(Server::Model::EventLoop, 18183); }
+BOOST_AUTO_TEST_CASE(test_rejection_is_logged_event_loop) { sCheckRejectionIsLogged(Server::Model::EventLoop); }
 
-BOOST_AUTO_TEST_CASE(test_keep_alive_thread_per_core) { sCheckKeepAlive(Server::Model::ThreadPerCore, 18176); }
+BOOST_AUTO_TEST_CASE(test_keep_alive_thread_per_core) { sCheckKeepAlive(Server::Model::ThreadPerCore); }
 
-BOOST_AUTO_TEST_CASE(test_keep_alive_event_loop) { sCheckKeepAlive(Server::Model::EventLoop, 18177); }
+BOOST_AUTO_TEST_CASE(test_keep_alive_event_loop) { sCheckKeepAlive(Server::Model::EventLoop); }
 
 BOOST_AUTO_TEST_CASE(test_keep_alive_can_be_disabled) {
 	const std::filesystem::path root = sMakeTempDir("keepalive-off");
@@ -896,14 +903,15 @@ BOOST_AUTO_TEST_CASE(test_keep_alive_can_be_disabled) {
 
 	Server::Config config;
 	config.servingDirectory = root;
-	config.port = 18178;
+	config.port = 0;
 	config.threadCount = 1;
 	config.keepAlive = false;
 
 	Server server(config);
 	BOOST_REQUIRE(server.start());
+	const uint16_t port = server.port();
 
-	const ou::UniqueFd fd = sConnect(config.port);
+	const ou::UniqueFd fd = sConnect(port);
 	BOOST_REQUIRE(fd.valid());
 
 	const std::string request = "GET /a.txt HTTP/1.1\r\nHost: x\r\n\r\n";
@@ -925,28 +933,29 @@ BOOST_AUTO_TEST_CASE(test_event_loop_serves_requests) {
 
 	Server::Config config;
 	config.servingDirectory = root;
-	config.port = 18174;
+	config.port = 0; // kernel picks
 	config.threadCount = 2;
 	config.model = Server::Model::EventLoop;
 
 	Server server(config);
 	BOOST_REQUIRE(server.start());
+	const uint16_t port = server.port();
 
-	const std::string ok = sRoundTrip(config.port, "GET /hello.txt HTTP/1.1\r\nHost: localhost\r\n\r\n");
+	const std::string ok = sRoundTrip(port, "GET /hello.txt HTTP/1.1\r\nHost: localhost\r\n\r\n");
 	BOOST_CHECK(ok.starts_with("HTTP/1.1 200 OK"));
 	BOOST_CHECK(ok.ends_with("hello loop"));
 
-	const std::string missing = sRoundTrip(config.port, "GET /nope.txt HTTP/1.1\r\nHost: localhost\r\n\r\n");
+	const std::string missing = sRoundTrip(port, "GET /nope.txt HTTP/1.1\r\nHost: localhost\r\n\r\n");
 	BOOST_CHECK(missing.starts_with("HTTP/1.1 404"));
 
-	const std::string malformed = sRoundTrip(config.port, "BOGUS / HTTP/1.1\r\nHost: localhost\r\n\r\n");
+	const std::string malformed = sRoundTrip(port, "BOGUS / HTTP/1.1\r\nHost: localhost\r\n\r\n");
 	BOOST_CHECK(malformed.starts_with("HTTP/1.1 400"));
 
-	const std::string large = sRoundTrip(config.port, "GET /large.txt HTTP/1.1\r\nHost: localhost\r\n\r\n");
+	const std::string large = sRoundTrip(port, "GET /large.txt HTTP/1.1\r\nHost: localhost\r\n\r\n");
 	BOOST_CHECK(large.starts_with("HTTP/1.1 200 OK"));
 	BOOST_CHECK_EQUAL(large.size() - large.find("\r\n\r\n") - 4, 200000U);
 
-	const std::string split = sRoundTrip(config.port, { "GET /hello.txt HTTP/1.1\r\nHost: ", "localhost\r\n", "\r\n" });
+	const std::string split = sRoundTrip(port, { "GET /hello.txt HTTP/1.1\r\nHost: ", "localhost\r\n", "\r\n" });
 	BOOST_CHECK(split.starts_with("HTTP/1.1 200 OK"));
 	BOOST_CHECK(split.ends_with("hello loop"));
 
@@ -961,20 +970,21 @@ BOOST_AUTO_TEST_CASE(test_event_loop_closes_idle_connection) {
 
 	Server::Config config;
 	config.servingDirectory = root;
-	config.port = 18175;
+	config.port = 0; // kernel picks
 	config.threadCount = 1;
 	config.model = Server::Model::EventLoop;
 	config.readTimeout = std::chrono::seconds(1);
 
 	Server server(config);
 	BOOST_REQUIRE(server.start());
+	const uint16_t port = server.port();
 
 	const ou::UniqueFd fd(::socket(AF_INET, SOCK_STREAM, 0));
 	BOOST_REQUIRE(fd.valid());
 
 	sockaddr_in address{};
 	address.sin_family = AF_INET;
-	address.sin_port = htons(config.port);
+	address.sin_port = htons(port);
 	address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 	BOOST_REQUIRE_EQUAL(::connect(fd.get(), reinterpret_cast<sockaddr *>(&address), sizeof(address)), 0);
 
@@ -1111,14 +1121,14 @@ BOOST_AUTO_TEST_CASE(test_access_log_concurrent_writes) {
 	AccessLog accessLog(AccessLog::Config{ .path = logPath, .flushBytes = 0 });
 	Response response = Response::plainText(200, "hello");
 
-	constexpr int threadCount = 4;
-	constexpr int perThread = 25;
+	constexpr int kThreadCount = 4;
+	constexpr int kPerThread = 25;
 
 	std::vector<std::thread> threads;
-	threads.reserve(threadCount);
-	for (int i = 0; i < threadCount; ++i) {
+	threads.reserve(kThreadCount);
+	for (int i = 0; i < kThreadCount; ++i) {
 		threads.emplace_back([&accessLog, &response]() {
-			for (int j = 0; j < perThread; ++j) {
+			for (int j = 0; j < kPerThread; ++j) {
 				Request request = sMakeLoggedRequest("/concurrent");
 				accessLog.postProcess(request, response);
 			}
@@ -1128,7 +1138,7 @@ BOOST_AUTO_TEST_CASE(test_access_log_concurrent_writes) {
 		thread.join();
 	}
 
-	BOOST_CHECK_EQUAL(sCountLines(logPath), static_cast<size_t>(threadCount * perThread));
+	BOOST_CHECK_EQUAL(sCountLines(logPath), static_cast<size_t>(kThreadCount * kPerThread));
 
 	std::filesystem::remove(logPath);
 }

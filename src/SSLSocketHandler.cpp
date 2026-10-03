@@ -7,7 +7,6 @@
 #include <format>
 #include <limits>
 #include <stdexcept>
-#include <unistd.h>
 #include <unordered_map>
 
 #include <openssl/err.h>
@@ -19,7 +18,8 @@ namespace {
 	// Large transfers are chunked since SSL_write() only takes an int
 	constexpr size_t kMaxTransfer = static_cast<size_t>(std::numeric_limits<int>::max());
 
-	// Thread-local so it needs no lock; a map because one event loop thread holds many connections
+	// Each connection's TLS session, by fd.
+	// Thread-local needs no lock since a connection never leaves its thread.
 	// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables) thread-local by design
 	thread_local std::unordered_map<int, SSL *> g_sessions;
 
@@ -64,7 +64,7 @@ SSLSocketHandler::SSLSocketHandler(const Config &config) : sslCtx_(SSL_CTX_new(T
 
 SSLSocketHandler::~SSLSocketHandler() { SSL_CTX_free(sslCtx_); }
 
-IoResult SSLSocketHandler::acceptConnection(int clientSocket) {
+IoResult SSLSocketHandler::handshake(int clientSocket) {
 	SSL *ssl = sSession(clientSocket);
 	if (ssl == nullptr) {
 		ssl = SSL_new(sslCtx_);
@@ -113,13 +113,13 @@ IoResult SSLSocketHandler::write(int clientSocket, std::string_view data) {
 	return sStatusFor(ssl, sent);
 }
 
-void SSLSocketHandler::closeConnection(int clientSocket) {
-	if (SSL *ssl = sSession(clientSocket); ssl != nullptr) {
-		SSL_shutdown(ssl);
-		sDiscardSession(clientSocket);
-	}
+void SSLSocketHandler::discardSession(int clientSocket) {
+	SSL *ssl = sSession(clientSocket);
+	if (ssl == nullptr)
+		return;
 
-	::close(clientSocket);
+	SSL_shutdown(ssl);
+	sDiscardSession(clientSocket);
 }
 
 } // namespace ou

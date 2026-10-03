@@ -18,12 +18,13 @@ struct ReadyEvent {
 	bool writable = false;
 };
 
-// One implementation per platform, in EpollPoller.cpp / KqueuePoller.cpp (static, no vtable).
+// Waits on many sockets at once: epoll on Linux, kqueue on macOS/BSD, chosen at compile time.
 // Level-triggered, so one read per wakeup is enough: what is left over is reported again next time.
 class Poller {
 public:
 	Poller();
 
+	// False if the kernel queue couldn't be created
 	[[nodiscard]] bool valid() const noexcept { return queue_.valid(); }
 
 	bool add(int fd, Interest interest);

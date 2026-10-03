@@ -11,6 +11,13 @@ namespace ou::http {
 
 namespace {
 
+	std::pair<std::string_view, std::string_view> sSplitAt(std::string_view str, char delimiter) {
+		const size_t pos = str.find(delimiter);
+		if (pos == std::string_view::npos)
+			return { str, {} };
+		return { str.substr(0, pos), str.substr(pos + 1) };
+	}
+
 	constexpr char sToLower(char ch) {
 		if (ch >= 'A' && ch <= 'Z')
 			return static_cast<char>(ch - 'A' + 'a');
@@ -117,13 +124,6 @@ std::map<std::string, std::string> parseQuery(std::string_view query) {
 	return params;
 }
 
-std::pair<std::string_view, std::string_view> Request::split_at(std::string_view str, char delimiter) {
-	const size_t pos = str.find(delimiter);
-	if (pos == std::string_view::npos)
-		return { str, {} };
-	return { str.substr(0, pos), str.substr(pos + 1) };
-}
-
 std::string_view trim(std::string_view str) {
 	constexpr std::string_view kWhitespace = " \t\n\v\f\r";
 	const size_t first = str.find_first_not_of(kWhitespace);
@@ -137,13 +137,13 @@ std::optional<Request> Request::parse(std::string_view raw) {
 	const std::string_view headerSection = raw.substr(0, headerEnd);
 	const std::string_view bodySection = (headerEnd != std::string_view::npos) ? raw.substr(headerEnd + 4) : std::string_view{};
 
-	auto [requestLine, headerLines] = split_at(headerSection, '\n');
+	auto [requestLine, headerLines] = sSplitAt(headerSection, '\n');
 	requestLine = trim(requestLine);
 	if (requestLine.empty())
 		return std::nullopt;
 
-	auto [methodToken, afterMethod] = split_at(requestLine, ' ');
-	auto [target, version] = split_at(afterMethod, ' ');
+	auto [methodToken, afterMethod] = sSplitAt(requestLine, ' ');
+	auto [target, version] = sSplitAt(afterMethod, ' ');
 
 	const std::optional<Method> method = stringToMethod(trim(methodToken));
 	if (!method)
@@ -167,7 +167,7 @@ std::optional<Request> Request::parse(std::string_view raw) {
 		return std::nullopt;
 
 	while (!headerLines.empty()) {
-		auto [line, remaining] = split_at(headerLines, '\n');
+		auto [line, remaining] = sSplitAt(headerLines, '\n');
 		headerLines = remaining;
 
 		line = trim(line);

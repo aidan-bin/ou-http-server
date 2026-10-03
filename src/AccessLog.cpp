@@ -34,11 +34,13 @@ AccessLog::AccessLog(Config config) : config_(std::move(config)) {}
 AccessLog::~AccessLog() { flush(); }
 
 void AccessLog::log(const Request &request, const Response &response, const sockaddr_in &clientAddr) {
+	// One instance is shared by every worker thread
 	const std::lock_guard<std::mutex> lock(mutex_);
 
-	pending_ += sFormatLogEntry(request, response, clientAddr);
+	buffer_ += sFormatLogEntry(request, response, clientAddr);
 
-	if (pending_.size() >= config_.flushBytes || std::chrono::steady_clock::now() - lastFlush_ >= config_.flushInterval)
+	// Size bounds memory; time bounds how far the file lags behind
+	if (buffer_.size() >= config_.flushBytes || std::chrono::steady_clock::now() - lastFlush_ >= config_.flushInterval)
 		flushLocked();
 }
 
@@ -49,21 +51,21 @@ void AccessLog::flush() {
 
 void AccessLog::flushLocked() {
 	lastFlush_ = std::chrono::steady_clock::now();
-	if (pending_.empty())
+	if (buffer_.empty())
 		return;
 
 	std::ofstream logFile(config_.path, std::ios::app);
 
 	if (logFile)
-		logFile << pending_;
+		logFile << buffer_;
 
-	pending_.clear();
+	buffer_.clear();
 }
 
 void AccessLog::postProcess(const Request &request, const Response &response) {
-	if (request.clientAddr.has_value()) {
+	// Middleware hook to log every request with its final status
+	if (request.clientAddr.has_value())
 		log(request, response, request.clientAddr.value());
-	}
 }
 
 } // namespace ou::http

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ConnectionLoop.h"
 #include "HttpTypes.h"
 #include "Poller.h"
 #include "RequestReader.h"
@@ -11,7 +12,6 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -23,14 +23,7 @@ namespace ou::http {
 // One per worker thread; owns each connection
 class EventLoop {
 public:
-	using Dispatch = std::function<Response(Request, const sockaddr_in &clientAddr)>;
-	using Reject = std::function<Response(int status, const sockaddr_in &clientAddr)>;
-
-	struct Config {
-		int listenSocket = -1; // Borrowed from Server
-		size_t maxRequestBytes = size_t{ 1024 } * 1024;
-		std::chrono::seconds idleTimeout{ 10 };
-	};
+	using Config = LoopConfig;
 
 	EventLoop(Config config, SocketHandler &socketHandler, Dispatch dispatch, Reject reject);
 
@@ -71,6 +64,8 @@ private:
 
 	// Returns the following connection for iteration
 	ConnectionMap::iterator close(ConnectionMap::iterator connection);
+
+	// Closes idle connections
 	void sweepIdle();
 
 	Config config_;

@@ -47,9 +47,9 @@ if (CLANG_TIDY_EXECUTABLE)
 		set(TIDY_EXTRA_ARGS "--extra-arg-before=-isysroot${MACOSX_SDK_PATH}")
 	endif()
 
-	# Check list, -warnings-as-errors and color live in .clang-tidy, so editors get them too.
 	add_custom_target(tidy
-		COMMAND ${CLANG_TIDY_EXECUTABLE} -p ${CMAKE_BINARY_DIR} --quiet ${TIDY_EXTRA_ARGS} ${TIDY_SOURCES}
+		COMMAND ${CLANG_TIDY_EXECUTABLE} -p ${CMAKE_BINARY_DIR} --quiet
+			"--header-filter=${CMAKE_SOURCE_DIR}/(src|tests)/" ${TIDY_EXTRA_ARGS} ${TIDY_SOURCES}
 		COMMENT "Running clang-tidy over src/ and tests/"
 		VERBATIM)
 else()

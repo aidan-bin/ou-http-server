@@ -55,8 +55,9 @@ void EventLoop::acceptReady() {
 		socklen_t length = sizeof(address);
 
 		UniqueFd client(::accept(config_.listenSocket, reinterpret_cast<struct sockaddr *>(&address), &length));
+		// EAGAIN or a failed accept -> stop
 		if (!client)
-			return; // Drained, or a failure the next wakeup will retry
+			return;
 
 		if (!setNonBlocking(client.get(), true))
 			continue;
@@ -92,7 +93,7 @@ bool EventLoop::service(Connection &connection) {
 	connection.lastActivity = std::chrono::steady_clock::now();
 
 	if (connection.state == State::Handshaking) {
-		const IoResult accepted = socketHandler_.acceptConnection(connection.fd.get());
+		const IoResult accepted = socketHandler_.handshake(connection.fd.get());
 		if (accepted.status == IoStatus::WantRead)
 			return arm(connection, Interest::Read);
 		if (accepted.status == IoStatus::WantWrite)
@@ -185,10 +186,9 @@ EventLoop::ConnectionMap::iterator EventLoop::close(ConnectionMap::iterator conn
 	const int clientSocket = connection->second.fd.get();
 
 	(void)poller_.remove(clientSocket);
-	(void)connection->second.fd.release(); // The handler closes it and frees any TLS session
-	socketHandler_.closeConnection(clientSocket);
+	socketHandler_.discardSession(clientSocket);
 
-	return connections_.erase(connection);
+	return connections_.erase(connection); // Closes connection in the UniqueFd destructor
 }
 
 void EventLoop::sweepIdle() {

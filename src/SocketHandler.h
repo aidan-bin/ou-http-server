@@ -39,17 +39,20 @@ public:
 	SocketHandler &operator=(SocketHandler &&) = delete;
 	virtual ~SocketHandler() = default;
 
-	// A handshake still in flight reports WantRead/WantWrite and resumes on the next call
-	virtual IoResult acceptConnection(int clientSocket) = 0;
+	// Call once per new connection before reading; a no-op for plain sockets.
+	// A TLS handshake still in flight reports WantRead/WantWrite and resumes on the next call.
+	virtual IoResult handshake(int clientSocket) = 0;
 
 	virtual IoResult read(int clientSocket, std::span<char> buffer) = 0;
 
 	// May write less than asked; the caller resumes from result.bytes
 	virtual IoResult write(int clientSocket, std::string_view data) = 0;
 
-	virtual void closeConnection(int clientSocket) = 0;
+	// Releases whatever the handler holds for this socket; caller owns the fd and closes it
+	virtual void discardSession(int clientSocket) = 0;
 
-	// Correct only on a blocking socket
+	// Unlike write(), retries until everything is sent.
+	// Blocking sockets only: on a non-blocking one it gives up at the first WantWrite.
 	IoResult writeAll(int clientSocket, std::string_view data) {
 		size_t written = 0;
 		while (written < data.size()) {
@@ -66,12 +69,12 @@ public:
 
 class PlainSocketHandler final : public SocketHandler {
 public:
-	IoResult acceptConnection(int clientSocket) override final {
+	IoResult handshake(int clientSocket) final {
 		(void)clientSocket;
 		return {};
 	}
 
-	IoResult read(int clientSocket, std::span<char> buffer) override final {
+	IoResult read(int clientSocket, std::span<char> buffer) final {
 		ssize_t bytesRead = 0;
 		while ((bytesRead = ::read(clientSocket, buffer.data(), buffer.size())) < 0 && errno == EINTR) {
 		}
@@ -84,7 +87,7 @@ public:
 		return { .status = wouldBlock() ? IoStatus::WantRead : IoStatus::Error };
 	}
 
-	IoResult write(int clientSocket, std::string_view data) override final {
+	IoResult write(int clientSocket, std::string_view data) final {
 		ssize_t sent = 0;
 		while ((sent = ::send(clientSocket, data.data(), data.size(), 0)) < 0 && errno == EINTR) {
 		}
@@ -97,7 +100,7 @@ public:
 		return { .status = wouldBlock() ? IoStatus::WantWrite : IoStatus::Error };
 	}
 
-	void closeConnection(int clientSocket) override final { ::close(clientSocket); }
+	void discardSession(int clientSocket) final { (void)clientSocket; }
 
 private:
 	static bool wouldBlock() { return errno == EAGAIN || errno == EWOULDBLOCK; }
