@@ -17,7 +17,9 @@
 #include <memory>
 #include <regex>
 #include <string>
+#include <string_view>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -58,6 +60,17 @@ public:
 		std::chrono::seconds readTimeout{ 10 };
 
 		bool keepAlive = true;
+
+		// Loads files into memory at construction (up to this many bytes total). 0 disables.
+		// Files that don't fit are served from disk. Changes on disk afterwards are not seen.
+		size_t preloadBytes = 0;
+
+		// Skips resolving symlinks on each disk request. ".." is still rejected, but a symlink inside the
+		// serving directory can point anywhere.
+		bool skipSymlinkCheck = false;
+
+		// One console line per routed request
+		bool logRequests = true;
 
 #ifndef DISABLE_HTTPS
 		SSLSocketHandler::Config https;
@@ -100,6 +113,12 @@ private:
 		Handler handler;
 	};
 
+	struct PreloadedFile {
+		std::string body;
+		std::string_view contentType;
+	};
+
+	void preload();
 	void runLoop();
 
 	// Wraps handleRequest with what needs the connection (client address, keep-alive, and the log line)
@@ -107,6 +126,7 @@ private:
 
 	Config config_;
 	std::filesystem::path servingRoot_;
+	std::unordered_map<std::string, PreloadedFile> preloaded_;
 	uint16_t port_ = 0;
 	std::atomic<bool> running_{ false };
 	std::vector<std::thread> threads_;

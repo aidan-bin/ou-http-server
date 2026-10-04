@@ -5,13 +5,18 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <format>
-#include <fstream>
+#include <optional>
+#include <span>
 #include <system_error>
 #include <utility>
 
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 namespace {
 
@@ -45,6 +50,28 @@ std::string_view sMimeTypeFor(const std::filesystem::path &path) {
 bool sIsWithin(const std::filesystem::path &candidate, const std::filesystem::path &root) {
 	const auto mismatched = std::ranges::mismatch(root, candidate);
 	return mismatched.in1 == root.end();
+}
+
+ou::UniqueFd sOpenReadOnly(const std::filesystem::path &path) {
+	// NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg) open() is variadic
+	return ou::UniqueFd(::open(path.c_str(), O_RDONLY | O_CLOEXEC));
+}
+
+// Reads up to size bytes
+std::optional<std::string> sReadFile(int fd, size_t size) {
+	std::string body(size, '\0');
+	size_t filled = 0;
+	while (filled < size) {
+		const std::span<char> rest = std::span(body).subspan(filled);
+		const ssize_t bytes = ::read(fd, rest.data(), rest.size());
+		if (bytes < 0)
+			return std::nullopt;
+		if (bytes == 0)
+			break;
+		filled += static_cast<size_t>(bytes);
+	}
+	body.resize(filled);
+	return body;
 }
 
 std::string sHtmlEscape(std::string_view text) {
@@ -115,7 +142,46 @@ Server::Server(Config config) : config_(std::move(config)) {
 	if (ec) {
 		LOG_ERROR("Cannot resolve serving directory: {}", config_.servingDirectory.string());
 		servingRoot_.clear();
+		return;
 	}
+
+	if (config_.preloadBytes > 0)
+		preload();
+}
+
+void Server::preload() {
+	size_t total = 0;
+	size_t skipped = 0;
+	std::error_code ec;
+
+	for (auto it = std::filesystem::recursive_directory_iterator(servingRoot_, ec);
+			 !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
+		if (!it->is_regular_file(ec))
+			continue;
+
+		const std::filesystem::path target = std::filesystem::canonical(it->path(), ec);
+		if (ec || !sIsWithin(target, servingRoot_))
+			continue;
+
+		const size_t size = it->file_size(ec);
+		if (ec || total + size > config_.preloadBytes) {
+			++skipped;
+			continue;
+		}
+
+		const UniqueFd file = sOpenReadOnly(target);
+		std::optional<std::string> body = file ? sReadFile(file.get(), size) : std::nullopt;
+		if (!body)
+			continue;
+
+		total += body->size();
+		const std::string requestPath = "/" + it->path().lexically_relative(servingRoot_).generic_string();
+		preloaded_.emplace(requestPath, PreloadedFile{ .body = std::move(*body), .contentType = sMimeTypeFor(target) });
+	}
+
+	LOG_INFO("Preloaded {} files ({} bytes)", preloaded_.size(), total);
+	if (skipped > 0)
+		LOG_WARN("{} files did not fit in preloadBytes and will be served from disk", skipped);
 }
 
 Server::~Server() { stop(); }
@@ -287,11 +353,12 @@ Response Server::serve(Request request, const sockaddr_in &clientAddr) const {
 	request.clientAddr = clientAddr;
 	const bool keepAlive = config_.keepAlive && request.wantsKeepAlive();
 
-	const std::string requestLine = std::format("{} {}", request.method, request.path);
+	const std::string requestLine = config_.logRequests ? std::format("{} {}", request.method, request.path) : std::string();
 	Response response = handleRequest(std::move(request));
 	response.keepAlive = keepAlive;
 
-	LOG_INFO("{} from {} -> {}", requestLine, addressToString(clientAddr), response.statusCode);
+	if (config_.logRequests)
+		LOG_INFO("{} from {} -> {}", requestLine, addressToString(clientAddr), response.statusCode);
 	return response;
 }
 
@@ -316,8 +383,17 @@ Response Server::handleStaticFileRequest(const Request &request) const {
 	if (servingRoot_.empty())
 		return Response::error(500);
 
+	if (const auto preloaded = preloaded_.find(request.path); preloaded != preloaded_.end()) {
+		Response response;
+		response.headers.emplace("Content-Type", preloaded->second.contentType);
+		response.body = preloaded->second.body;
+		return response;
+	}
+
 	std::error_code ec;
-	const std::filesystem::path target = std::filesystem::weakly_canonical(servingRoot_ / std::string_view(request.path).substr(1), ec);
+	const std::filesystem::path requested = servingRoot_ / std::string_view(request.path).substr(1);
+	const std::filesystem::path target
+			= config_.skipSymlinkCheck ? requested.lexically_normal() : std::filesystem::weakly_canonical(requested, ec);
 	if (ec)
 		return Response::error(404);
 
@@ -326,13 +402,19 @@ Response Server::handleStaticFileRequest(const Request &request) const {
 		return Response::error(403);
 	}
 
-	const std::filesystem::file_status targetStatus = std::filesystem::status(target, ec);
-	if (ec || !std::filesystem::exists(targetStatus)) {
+	const UniqueFd file = sOpenReadOnly(target);
+	if (!file && (errno == ENOENT || errno == ENOTDIR)) {
 		LOG_ERROR("File not found: {}", target.string());
 		return Response::error(404);
 	}
 
-	if (std::filesystem::is_directory(targetStatus)) {
+	struct stat targetStatus{};
+	if (!file || ::fstat(file.get(), &targetStatus) < 0) {
+		LOG_ERROR("Failed to open file: {}", target.string());
+		return Response::error(500);
+	}
+
+	if (S_ISDIR(targetStatus.st_mode)) {
 		if (!config_.enableDirectoryIndexing) {
 			LOG_WARN("Directory indexing is disabled, returning 403 Forbidden.");
 			return Response::error(403);
@@ -350,21 +432,15 @@ Response Server::handleStaticFileRequest(const Request &request) const {
 		return response;
 	}
 
-	std::ifstream file(target, std::ios::binary);
-	if (!file) {
-		LOG_ERROR("Failed to open file: {}", target.string());
-		return Response::error(500);
-	}
-
-	std::string body((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-	if (file.bad()) {
+	std::optional<std::string> body = sReadFile(file.get(), static_cast<size_t>(targetStatus.st_size));
+	if (!body) {
 		LOG_ERROR("Failed to read file: {}", target.string());
 		return Response::error(500);
 	}
 
 	Response response;
 	response.headers.emplace("Content-Type", std::string(sMimeTypeFor(target)));
-	response.body = std::move(body);
+	response.body = std::move(*body);
 	return response;
 }
 

@@ -1,8 +1,10 @@
 #pragma once
 
+#include <cstdio>
 #include <format>
 #include <iostream>
 #include <mutex>
+#include <string>
 
 namespace ou::detail {
 
@@ -11,13 +13,17 @@ inline std::mutex &logMutex() {
 	return mutex;
 }
 
-// Locked so lines from concurrent workers don't interleave
-template <typename... Args> void writeLine(bool flush, std::format_string<const Args &...> format, const Args &...args) {
-	const std::lock_guard<std::mutex> lock(logMutex());
+template <typename... Args> void writeLine(bool flush, std::format_string<const Args &...> format, const Args &...args) noexcept {
+	try {
+		const std::string line = std::format(format, args...);
+		const std::lock_guard<std::mutex> lock(logMutex());
 
-	std::cout << std::format(format, args...) << '\n';
-	if (flush)
-		std::cout.flush();
+		std::cout << line << '\n';
+		if (flush)
+			std::cout.flush();
+	} catch (...) {
+		(void)std::fputs("[ERROR] Failed to write a log line\n", stderr);
+	}
 }
 
 } // namespace ou::detail

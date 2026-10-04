@@ -34,10 +34,10 @@ AccessLog::AccessLog(Config config) : config_(std::move(config)) {}
 AccessLog::~AccessLog() { flush(); }
 
 void AccessLog::log(const Request &request, const Response &response, const sockaddr_in &clientAddr) {
-	// One instance is shared by every worker thread
+	const std::string entry = sFormatLogEntry(request, response, clientAddr);
 	const std::lock_guard<std::mutex> lock(mutex_);
 
-	buffer_ += sFormatLogEntry(request, response, clientAddr);
+	buffer_ += entry;
 
 	// Size bounds memory; time bounds how far the file lags behind
 	if (buffer_.size() >= config_.flushBytes || std::chrono::steady_clock::now() - lastFlush_ >= config_.flushInterval)

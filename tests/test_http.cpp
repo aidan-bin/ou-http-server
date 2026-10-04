@@ -377,6 +377,24 @@ BOOST_AUTO_TEST_CASE(test_directory_traversal_is_rejected) {
 	BOOST_CHECK_EQUAL(server.handleStaticFileRequest(sParse("GET /..%2Fsecret.txt HTTP/1.1\r\n\r\n")).statusCode, 403);
 }
 
+BOOST_AUTO_TEST_CASE(test_skip_symlink_check_still_blocks_traversal) {
+	const TempDir outer("skip-symlink-check");
+	outer.write("secret.txt", "secret");
+	std::filesystem::create_directory(outer.path() / "www");
+	outer.write("www/public.txt", "public");
+	std::filesystem::create_symlink(outer.path() / "secret.txt", outer.path() / "www/link.txt");
+
+	Server::Config config = sConfig(outer.path() / "www");
+	config.skipSymlinkCheck = true;
+	const TestServer server(config);
+
+	BOOST_CHECK_EQUAL(server.handleStaticFileRequest(sMakeRequest("/public.txt")).body, "public");
+	BOOST_CHECK_EQUAL(server.handleStaticFileRequest(sMakeRequest("/link.txt")).body, "secret");
+	BOOST_CHECK_EQUAL(server.handleStaticFileRequest(sMakeRequest("/../secret.txt")).statusCode, 403);
+	BOOST_CHECK_EQUAL(server.handleStaticFileRequest(sMakeRequest("/subdir/../../secret.txt")).statusCode, 403);
+	BOOST_CHECK_EQUAL(server.handleStaticFileRequest(sParse("GET /..%2Fsecret.txt HTTP/1.1\r\n\r\n")).statusCode, 403);
+}
+
 BOOST_AUTO_TEST_CASE(test_directory_indexing_escapes_names) {
 	const TempDir root("indexing");
 	root.write("a<script>.txt", "x");
@@ -394,6 +412,33 @@ BOOST_AUTO_TEST_CASE(test_directory_indexing_escapes_names) {
 	BOOST_CHECK(!sContains(index.body, "<script>"));
 	BOOST_CHECK(sContains(index.body, "href=\"/a%20b.txt\""));
 	BOOST_CHECK(sContains(index.body, ">a b.txt<"));
+}
+
+BOOST_AUTO_TEST_CASE(test_preloaded_files_are_served_from_memory) {
+	const TempDir outer("preload");
+	outer.write("secret.txt", "secret");
+	std::filesystem::create_directories(outer.path() / "www/sub");
+	outer.write("www/small.txt", "small");
+	outer.write("www/sub/page.html", "<p>");
+	outer.write("www/big.txt", std::string(64, 'x'));
+	std::filesystem::create_symlink(outer.path() / "secret.txt", outer.path() / "www/escape.txt");
+
+	Server::Config config = sConfig(outer.path() / "www");
+	config.preloadBytes = 32;
+	const TestServer server(config);
+
+	outer.write("www/small.txt", "changed");
+	outer.write("www/big.txt", "big");
+
+	BOOST_CHECK_EQUAL(server.handleStaticFileRequest(sMakeRequest("/small.txt")).body, "small");
+	BOOST_CHECK_EQUAL(server.handleStaticFileRequest(sMakeRequest("/big.txt")).body, "big");
+
+	const Response nested = server.handleStaticFileRequest(sMakeRequest("/sub/page.html"));
+	BOOST_CHECK_EQUAL(nested.body, "<p>");
+	BOOST_CHECK_EQUAL(nested.headers.at("Content-Type"), "text/html");
+
+	BOOST_CHECK_EQUAL(server.handleStaticFileRequest(sMakeRequest("/escape.txt")).statusCode, 403);
+	BOOST_CHECK_EQUAL(server.handleStaticFileRequest(sMakeRequest("/sub/../../secret.txt")).statusCode, 403);
 }
 
 // --- Key-value store ---
@@ -739,8 +784,11 @@ BOOST_DATA_TEST_CASE(test_keep_alive, bdata::make(kModels), model) {
 	{ // Pipelined: both requests arrive in one write, both get answered
 		const ou::UniqueFd fd = sConnect(port);
 		sSend(fd, "GET /a.txt HTTP/1.1\r\nHost: x\r\n\r\nGET /b.txt HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
-		BOOST_CHECK(sReadResponse(fd).ends_with("aaa"));
-		BOOST_CHECK(sReadResponse(fd).ends_with("bbbb"));
+		std::string both;
+		for (std::string part = sReadResponse(fd); !part.empty(); part = sReadResponse(fd))
+			both += part;
+		BOOST_CHECK(sContains(both, "aaaHTTP/1.1 200 OK"));
+		BOOST_CHECK(both.ends_with("bbbb"));
 	}
 
 	{ // Connection: close is honoured, and the server really closes

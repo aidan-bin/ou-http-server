@@ -3,9 +3,11 @@ import argparse
 import os
 import platform
 import re
+import shutil
 import statistics
 import subprocess
 import sys
+import tempfile
 import time
 
 BUILD_DIR = "build"
@@ -13,46 +15,25 @@ DOCKER_IMAGE = "ou_http_server_image"
 
 def run_command(cmd, cwd=None):
 	print(f"Running command: {' '.join(cmd)}")
-	try:
-		subprocess.check_call(cmd, cwd=cwd)
-	except subprocess.CalledProcessError as e:
-		print(f"Command failed with error: {e}")
-		sys.exit(e.returncode)
+	if (code := subprocess.call(cmd, cwd=cwd)) != 0:
+		sys.exit(code)
 
-def build(disable_https):
-	if not os.path.isdir(BUILD_DIR):
-		os.makedirs(BUILD_DIR)
+def require(path, what):
+	if not os.path.exists(path):
+		sys.exit(f"{what} not found. Please build first.")
 
-	cmake_cmd = ["cmake", ".."]
-	cmake_cmd.append(f"-DDISABLE_HTTPS={'ON' if disable_https else 'OFF'}")
+def build(args):
+	run_command(["cmake", "-S", ".", "-B", BUILD_DIR, f"-DDISABLE_HTTPS={'ON' if args.disable_https else 'OFF'}"])
+	run_command(["cmake", "--build", BUILD_DIR])
 
-	run_command(cmake_cmd, cwd=BUILD_DIR)
-	run_command(["make"], cwd=BUILD_DIR)
+def run_main(args):
+	exe = os.path.join(BUILD_DIR, "ou_http_server")
+	require(exe, "Executable")
+	run_command([exe] + (["--eventloop"] if args.eventloop else []))
 
-def run_main(event_loop):
-	exe_path = os.path.join(BUILD_DIR, "ou_http_server")
-	if not os.path.isfile(exe_path):
-		print("Executable not found. Please build first.")
-		sys.exit(1)
-	run_command([exe_path] + (["--eventloop"] if event_loop else []))
-
-def run_tests():
-	if not os.path.isdir(BUILD_DIR):
-		print("Build directory not found. Please build first.")
-		sys.exit(1)
-	run_command(["ctest", "--verbose"], cwd=BUILD_DIR)
-
-def run_tidy():
-	if not os.path.isdir(BUILD_DIR):
-		print("Build directory not found. Please build first.")
-		sys.exit(1)
-	run_command(["cmake", "--build", ".", "--target", "tidy"], cwd=BUILD_DIR)
-
-def docker_build():
-	run_command(["docker", "build", "-t", DOCKER_IMAGE, "."])
-
-def docker_run():
-	run_command(["docker", "run", "-it", DOCKER_IMAGE])
+def run_in_build(cmd):
+	require(BUILD_DIR, "Build directory")
+	run_command(cmd, cwd=BUILD_DIR)
 
 def to_ms(value):
 	number, unit = re.fullmatch(r"([\d.]+)(us|ms|s|m)", value).groups()
@@ -63,12 +44,10 @@ def parse_wrk(out):
 	if "Non-2xx" in out:
 		sys.exit(f"wrk saw non-2xx responses; check the path:\n{out}")
 	rps = float(re.search(r"Requests/sec:\s+([\d.]+)", out)[1])
-	threads = int(re.search(r"(\d+) threads", out)[1])
-	per_thread, k = re.search(r"Req/Sec\s+([\d.]+)(k?)", out).groups()
-	if rps < 0.5 * threads * float(per_thread) * (1000 if k else 1):
-		print("WARNING: some connections got no responses; latency excludes them", file=sys.stderr)
+	avg = to_ms(re.search(r"Latency\s+(\S+)", out)[1])
 	latency = dict(re.findall(r"^\s+(50|99)%\s+(\S+)$", out, re.M))
-	return rps, to_ms(latency["50"]), to_ms(latency["99"])
+	served = rps * avg / 1000
+	return rps, to_ms(latency["50"]), to_ms(latency["99"]), served
 
 def profile(pid, seconds, svg):
 	raw = svg.removesuffix(".svg") + ".raw"
@@ -81,13 +60,35 @@ def profile(pid, seconds, svg):
 		collapse = f"perf script -i {raw} | stackcollapse-perf.pl"
 	subprocess.run(f"{collapse} | flamegraph.pl > {svg}", shell=True, check=True)
 
-def bench_once(exe, flags, wrk_cmd, svg, duration):
-	server = subprocess.Popen([exe, *flags], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+def nginx_cmd(prefix):
+	# Matched to the bench's server: 4 workers, no per-request logging, same files
+	user = "user root;" if os.geteuid() == 0 else ""
+	with open(os.path.join(prefix, "nginx.conf"), "w") as f:
+		f.write(f"""
+worker_processes 4;
+{user}
+pid {prefix}/nginx.pid;
+error_log {prefix}/error.log;
+events {{}}
+http {{
+	access_log off;
+	server {{
+		listen 8080;
+		root {prefix}/example/www;
+	}}
+}}
+""")
+	return ["nginx", "-p", prefix, "-c", "nginx.conf", "-g", "daemon off;"]
+
+def bench_once(cmd, cwd, wrk_cmd, svg, duration):
+	server = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 	try:
 		time.sleep(0.5)
 		if server.poll() is not None:
 			sys.exit("Server exited on startup (is :8080 already in use?)")
-		wrk = subprocess.Popen(wrk_cmd, stdout=subprocess.PIPE, text=True)
+		# Warm-up so connection setup and first touches stay out of the numbers
+		subprocess.run(wrk_cmd(1), stdout=subprocess.DEVNULL, check=True)
+		wrk = subprocess.Popen(wrk_cmd(duration), stdout=subprocess.PIPE, text=True)
 		if svg:
 			time.sleep(1)
 			profile(server.pid, duration - 2, svg)
@@ -105,66 +106,77 @@ def bench(args):
 	bench_dir = os.path.join(BUILD_DIR, f"bench-{platform.system().lower()}")
 	run_command(["cmake", "-S", ".", "-B", bench_dir, "-DCMAKE_BUILD_TYPE=RelWithDebInfo", "-DDISABLE_HTTPS=ON"])
 	run_command(["cmake", "--build", bench_dir, "--target", "ou_http_server", "-j", str(os.cpu_count())])
-	exe = os.path.join(bench_dir, "ou_http_server")
+	exe = os.path.abspath(os.path.join(bench_dir, "ou_http_server"))
 
 	# Too few wrk threads leaves connections idle, which the event loop reports as latency
 	if args.conns / args.threads > 12:
 		print(f"WARNING: {args.conns} connections over {args.threads} wrk threads inflates p99; raise -t", file=sys.stderr)
 
-	wrk_cmd = ["wrk", f"-t{args.threads}", f"-c{args.conns}", f"-d{args.duration}s", "--latency", *args.wrk_args, "http://127.0.0.1:8080/file1.txt"]
-	print(f"{platform.system()} {platform.machine()}: {' '.join(wrk_cmd)}, {args.reps} reps")
+	pin = lambda cpus: ["taskset", "-c", cpus] if shutil.which("taskset") and os.cpu_count() >= 8 else []
+	wrk_args = [a for a in args.wrk_args if a != "--"]
+	wrk_cmd = lambda seconds: [*pin("4-7"), "wrk", f"-t{args.threads}", f"-c{args.conns}", f"-d{seconds}s", "--latency", *wrk_args, f"http://127.0.0.1:8080{args.path}"]
+	print(f"{platform.system()} {platform.machine()}: {' '.join(wrk_cmd(args.duration))}, {args.reps} reps")
 
-	print(f"{'median':<16} {'req/s':>10} {'p50 ms':>10} {'p99 ms':>10}")
-	for model, flags in {"thread-per-core": [], "event-loop": ["--eventloop"]}.items():
-		svg = os.path.join(bench_dir, f"flame-{model}.svg") if args.flame else None
-		runs = [bench_once(exe, flags, wrk_cmd, svg, args.duration) for _ in range(1 if args.flame else args.reps)]
-		rps, p50, p99 = map(statistics.median, zip(*runs))
-		print(f"{model:<16} {rps:>10.0f} {p50:>10.2f} {p99:>10.2f}")
+	with tempfile.TemporaryDirectory(prefix="ou-bench-") as workdir:
+		shutil.copytree("example/www", os.path.join(workdir, "example/www"))
+
+		flags = ["--no-access-log", "--no-request-log"] + (["--no-preload"] if args.disk else []) + (["--skip-symlink-check"] if args.skip_symlink_check else [])
+		servers = {"thread-per-core": [exe, *flags], "event-loop": [exe, "--eventloop", *flags]}
+		if args.nginx:
+			servers["nginx"] = nginx_cmd(workdir)
+		servers = {model: [*pin("0-3"), *cmd] for model, cmd in servers.items()}
+
+		print(f"{'median':<16} {'req/s':>10} {'spread':>7} {'p50 ms':>10} {'p99 ms':>10} {'served':>7}")
+		for model, cmd in servers.items():
+			svg = os.path.join(bench_dir, f"flame-{model}.svg") if args.flame and model != "nginx" else None
+			runs = [bench_once(cmd, workdir, wrk_cmd, svg, args.duration) for _ in range(1 if args.flame else args.reps)]
+			rates, p50s, p99s, serveds = zip(*runs)
+			rps, served = statistics.median(rates), statistics.median(serveds)
+			spread = (max(rates) - min(rates)) / rps * 100
+			print(f"{model:<16} {rps:>10.0f} {spread:>6.0f}% {statistics.median(p50s):>10.2f} {statistics.median(p99s):>10.2f} {min(served, args.conns):>4.0f}/{args.conns}")
+			if served < 0.8 * args.conns:
+				print(f"  {model}: only ~{served:.0f} of {args.conns} connections in flight; latency covers just those", file=sys.stderr)
 
 def main():
 	sys.stdout.reconfigure(line_buffering=True)
-	parser = argparse.ArgumentParser(
-		description="Build, run, and test the ou HTTP server (local or Docker)."
-	)
+	parser = argparse.ArgumentParser(description="Build, run, and test the ou HTTP server (local or Docker).")
 	subparsers = parser.add_subparsers(dest="command", help="sub-command help")
 
 	build_parser = subparsers.add_parser("build", help="Build the project locally")
 	build_parser.add_argument("--disable-https", action="store_true", help="Disable HTTPS support in the build")
+	build_parser.set_defaults(func=build)
 
 	run_parser = subparsers.add_parser("run", help="Run the main program locally")
 	run_parser.add_argument("--eventloop", action="store_true", help="Serve with the epoll/kqueue event loop instead of thread-per-core")
-	subparsers.add_parser("test", help="Run the unit tests locally")
-	subparsers.add_parser("tidy", help="Run clang-tidy over src/ and tests/ (requires a prior build)")
+	run_parser.set_defaults(func=run_main)
+
+	subparsers.add_parser("test", help="Run the unit tests locally").set_defaults(func=lambda _: run_in_build(["ctest", "--verbose"]))
+	subparsers.add_parser("tidy", help="Run clang-tidy over src/ and tests/ (requires a prior build)").set_defaults(
+		func=lambda _: run_in_build(["cmake", "--build", ".", "--target", "tidy"]))
+
 	bench_parser = subparsers.add_parser("bench", help="A/B both concurrency models under wrk (optimized HTTP-only build)")
 	bench_parser.add_argument("--docker", action="store_true", help="Run inside the Docker image (Linux, epoll)")
 	bench_parser.add_argument("--flame", action="store_true", help="One profiled run per model, writing flamegraph SVGs")
-	bench_parser.add_argument("-c", "--conns", type=int, default=50, help="Concurrent connections")
-	bench_parser.add_argument("-t", "--threads", type=int, default=8, help="wrk threads")
+	bench_parser.add_argument("-c", "--conns", type=int, default=48, help="Concurrent connections")
+	bench_parser.add_argument("-t", "--threads", type=int, default=4, help="wrk threads (with the server's 4, keep under the core count)")
 	bench_parser.add_argument("-d", "--duration", type=int, default=10, help="Seconds per run")
 	bench_parser.add_argument("-r", "--reps", type=int, default=3, help="Runs per model; the median is reported")
+	bench_parser.add_argument("-p", "--path", default="/file1.txt", help="Request path, e.g. '/sleep?ms=10' for a blocking handler")
+	bench_parser.add_argument("--disk", action="store_true", help="Serve files from disk rather than preloaded into memory")
+	bench_parser.add_argument("--skip-symlink-check", action="store_true", help="Skip per-request symlink resolution, as nginx does by default")
+	bench_parser.add_argument("--nginx", action="store_true", help="Also run nginx (4 workers, same files) as a baseline")
 	bench_parser.add_argument("wrk_args", nargs=argparse.REMAINDER, help="Extra wrk arguments after --")
-	subparsers.add_parser("docker-build", help="Build the Docker image")
-	subparsers.add_parser("docker-run", help="Run the Docker container")
+	bench_parser.set_defaults(func=bench)
+
+	subparsers.add_parser("docker-build", help="Build the Docker image").set_defaults(
+		func=lambda _: run_command(["docker", "build", "-t", DOCKER_IMAGE, "."]))
+	subparsers.add_parser("docker-run", help="Run the Docker container").set_defaults(func=lambda _: run_command(["docker", "run", "-it", DOCKER_IMAGE]))
 
 	args = parser.parse_args()
-
-	if args.command == "build":
-		build(args.disable_https)
-	elif args.command == "run":
-		run_main(args.eventloop)
-	elif args.command == "test":
-		run_tests()
-	elif args.command == "tidy":
-		run_tidy()
-	elif args.command == "bench":
-		args.wrk_args = [a for a in args.wrk_args if a != "--"]
-		bench(args)
-	elif args.command == "docker-build":
-		docker_build()
-	elif args.command == "docker-run":
-		docker_run()
-	else:
+	if "func" not in args:
 		parser.print_help()
+		return
+	args.func(args)
 
 if __name__ == "__main__":
 	main()

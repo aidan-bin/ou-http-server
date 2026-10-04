@@ -12,6 +12,7 @@ Thumbs.db
 *.o
 *.out
 *.exe
+*.pyc
 
 CMakeCache.txt
 CMakeFiles/

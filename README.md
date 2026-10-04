@@ -84,17 +84,31 @@ docker-compose down
 
 ## Benchmarking
 
-`./server.py bench` A/Bs the two concurrency models (thread-per-core vs event loop) under [`wrk`](https://github.com/wg/wrk) with keep-alive, reporting median req/s, p50 and p99.
+`./server.py bench` A/Bs the two concurrency models (thread-per-core vs event loop) under [`wrk`](https://github.com/wg/wrk) with keep-alive, reporting median req/s, p50, p99, run-to-run spread, and how many connections were actually served (wrk leaves starved connections out of its latency numbers).
 
 ```
-brew install wrk flamegraph                    # if not using Docker 
+brew install wrk flamegraph nginx              # if not using Docker
 
 ./server.py bench                              # native
 ./server.py bench --docker                     # Linux / epoll (run docker-build first)
 ./server.py bench -c 100 -t 16 -r 5            # connections, wrk threads, repeats (respectively)
 ./server.py bench -- -H 'Connection: close'    # anything after `--` goes to wrk
 ./server.py bench --flame [--docker]           # one profiled run per model -> build/bench-<os>/flame-*.svg
+./server.py bench --nginx                      # add nginx (4 workers, same files) as a baseline
+./server.py bench --disk                       # serve files from disk instead of preloaded into memory
+./server.py bench --disk --skip-symlink-check  # ...and skip per-request symlink resolution, like nginx
+./server.py bench -p '/sleep?ms=10'            # hit the demo's blocking handler
 ```
+
+### Results
+
+| Static file (`/file1.txt`) | req/s   | p50     | p99     | served |
+|----------------------------|---------|---------|---------|--------|
+| thread-per-core            | 55,496  | 0.06 ms | 0.11 ms | 4/48   |
+| event loop                 | 258,101 | 0.16 ms | 0.56 ms | 48/48  |
+| nginx 1.24                 | 270,281 | 0.16 ms | 0.66 ms | 48/48  |
+
+`./server.py bench --docker --nginx --disk --skip-symlink-check -r 5` on an Apple M4 (Linux container, epoll): 4 server threads each, `wrk -t4 -c48 -d10s`. On that baseline, the event loop is within about 5% of nginx. Thread-per-core serves only 4 of the 48 connections, so its latency is artificially low.
 
 ## HTTPS
 
