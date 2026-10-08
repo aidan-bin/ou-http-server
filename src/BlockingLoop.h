@@ -5,7 +5,7 @@
 #include "SocketHandler.h"
 #include "UniqueFd.h"
 
-#include <atomic>
+#include <stop_token>
 
 #include <netinet/in.h>
 
@@ -19,8 +19,8 @@ public:
 
 	BlockingLoop(Config config, SocketHandler &socketHandler, Dispatch dispatch, Reject reject);
 
-	// Returns within one accept poll timeout of running going false
-	void run(const std::atomic<bool> &running);
+	// Returns within one accept poll timeout of a stop request
+	void run(const std::stop_token &stop);
 
 private:
 	// Empty on timeout or error. Polls rather than blocking in accept() so the worker notices stop() on
@@ -28,7 +28,7 @@ private:
 	[[nodiscard]] UniqueFd acceptOne(sockaddr_in &clientAddr) const;
 
 	// Never throws, and never closes the socket
-	void handleConnection(int clientSocket, const sockaddr_in &clientAddr, const std::atomic<bool> &running) const;
+	void handleConnection(int clientSocket, const sockaddr_in &clientAddr, const std::stop_token &stop) const;
 
 	// Reads until a request is complete, unacceptable, or the peer stops sending
 	[[nodiscard]] RequestReader::Status readRequest(int clientSocket, RequestReader &reader) const;

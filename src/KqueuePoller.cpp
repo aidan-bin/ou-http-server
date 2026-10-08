@@ -20,6 +20,13 @@ namespace {
 		return kevent(queue, &change, 1, nullptr, 0, nullptr) == 0;
 	}
 
+	// EVFILT_USER idents are their own namespace, so 0 can't collide with a socket
+	bool sApplyWake(int queue, uint16_t flags, uint32_t fflags) {
+		struct kevent change{};
+		EV_SET(&change, 0, EVFILT_USER, flags, fflags, 0, nullptr);
+		return kevent(queue, &change, 1, nullptr, 0, nullptr) == 0;
+	}
+
 } // namespace
 
 Poller::Poller() : queue_(kqueue()) {}
@@ -44,6 +51,13 @@ bool Poller::remove(int fd) {
 	return true;
 }
 
+bool Poller::enableWake() {
+	// EV_CLEAR resets the trigger once reported, so wakes between waits collapse into one event
+	return sApplyWake(queue_.get(), EV_ADD | EV_CLEAR, 0);
+}
+
+void Poller::wake() { (void)sApplyWake(queue_.get(), 0, NOTE_TRIGGER); }
+
 std::span<const ReadyEvent> Poller::wait(std::chrono::milliseconds timeout) {
 	const timespec deadline{ .tv_sec = static_cast<time_t>(timeout.count() / 1000),
 													 .tv_nsec = static_cast<long>(timeout.count() % 1000) * 1000000 };
@@ -58,6 +72,11 @@ std::span<const ReadyEvent> Poller::wait(std::chrono::milliseconds timeout) {
 
 	ready_.clear();
 	for (const struct kevent &event : std::span(events).first(static_cast<size_t>(std::max(count, 0)))) {
+		if (event.filter == EVFILT_USER) {
+			ready_.push_back({ .woken = true });
+			continue;
+		}
+
 		const int fd = static_cast<int>(event.ident);
 
 		// One call can report both filters for an fd; coalesce so the two backends look identical

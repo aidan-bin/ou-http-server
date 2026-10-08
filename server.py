@@ -122,15 +122,22 @@ def bench(args):
 
 		flags = ["--no-access-log", "--no-request-log"] + (["--no-preload"] if args.disk else []) + (["--skip-symlink-check"] if args.skip_symlink_check else [])
 		servers = {"thread-per-core": [exe, *flags], "event-loop": [exe, "--eventloop", *flags]}
+		if args.handler_threads:
+			servers["event-loop+pool"] = [exe, "--eventloop", f"--handler-threads={args.handler_threads}", *flags]
 		if args.nginx:
 			servers["nginx"] = nginx_cmd(workdir)
 		servers = {model: [*pin("0-3"), *cmd] for model, cmd in servers.items()}
 
+		# Repeats are interleaved across models, so a slow stretch on the host lands on all of them alike
+		runs = {model: [] for model in servers}
+		for _ in range(1 if args.flame else args.reps):
+			for model, cmd in servers.items():
+				svg = os.path.join(bench_dir, f"flame-{model}.svg") if args.flame and model != "nginx" else None
+				runs[model].append(bench_once(cmd, workdir, wrk_cmd, svg, args.duration))
+
 		print(f"{'median':<16} {'req/s':>10} {'spread':>7} {'p50 ms':>10} {'p99 ms':>10} {'served':>7}")
-		for model, cmd in servers.items():
-			svg = os.path.join(bench_dir, f"flame-{model}.svg") if args.flame and model != "nginx" else None
-			runs = [bench_once(cmd, workdir, wrk_cmd, svg, args.duration) for _ in range(1 if args.flame else args.reps)]
-			rates, p50s, p99s, serveds = zip(*runs)
+		for model in servers:
+			rates, p50s, p99s, serveds = zip(*runs[model])
 			rps, served = statistics.median(rates), statistics.median(serveds)
 			spread = (max(rates) - min(rates)) / rps * 100
 			print(f"{model:<16} {rps:>10.0f} {spread:>6.0f}% {statistics.median(p50s):>10.2f} {statistics.median(p99s):>10.2f} {min(served, args.conns):>4.0f}/{args.conns}")
@@ -164,6 +171,7 @@ def main():
 	bench_parser.add_argument("-p", "--path", default="/file1.txt", help="Request path, e.g. '/sleep?ms=10' for a blocking handler")
 	bench_parser.add_argument("--disk", action="store_true", help="Serve files from disk rather than preloaded into memory")
 	bench_parser.add_argument("--skip-symlink-check", action="store_true", help="Skip per-request symlink resolution, as nginx does by default")
+	bench_parser.add_argument("--handler-threads", type=int, default=0, help="Also run the event loop with a handler pool this size")
 	bench_parser.add_argument("--nginx", action="store_true", help="Also run nginx (4 workers, same files) as a baseline")
 	bench_parser.add_argument("wrk_args", nargs=argparse.REMAINDER, help="Extra wrk arguments after --")
 	bench_parser.set_defaults(func=bench)

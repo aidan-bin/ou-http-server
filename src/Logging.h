@@ -1,33 +1,70 @@
 #pragma once
 
+#include <cstdint>
 #include <cstdio>
 #include <format>
 #include <iostream>
 #include <mutex>
+#include <source_location>
 #include <string>
+#include <string_view>
+#include <type_traits>
 
-namespace ou::detail {
+namespace ou {
 
-inline std::mutex &logMutex() {
-	static std::mutex mutex;
-	return mutex;
-}
+template <typename... Args>
+struct LogFormat {
+	consteval LogFormat(const char *text, std::source_location where = std::source_location::current()) // NOLINT(google-explicit-constructor)
+			: format(text), location(where) {}
 
-template <typename... Args> void writeLine(bool flush, std::format_string<const Args &...> format, const Args &...args) noexcept {
-	try {
-		const std::string line = std::format(format, args...);
-		const std::lock_guard<std::mutex> lock(logMutex());
+	std::format_string<Args...> format;
+	std::source_location location;
+};
 
-		std::cout << line << '\n';
-		if (flush)
-			std::cout.flush();
-	} catch (...) {
-		(void)std::fputs("[ERROR] Failed to write a log line\n", stderr);
+namespace detail {
+
+	enum class LogLevel : uint8_t { Info, Warn, Error };
+
+	inline std::mutex &logMutex() {
+		static std::mutex mutex;
+		return mutex;
 	}
+
+	[[nodiscard]] constexpr std::string_view fileName(std::string_view path) { return path.substr(path.find_last_of('/') + 1); }
+
+	template <typename... Args>
+	void writeLine(LogLevel level, const LogFormat<const Args &...> &format, const Args &...args) noexcept {
+		try {
+			const std::string message = std::format(format.format, args...);
+			const std::string line = level == LogLevel::Info
+																	 ? std::format("[INFO] {}\n", message)
+																	 : std::format("[{}] {}:{}: {}\n", level == LogLevel::Warn ? "WARNING" : "ERROR",
+																								 fileName(format.location.file_name()), format.location.line(), message);
+
+			const std::lock_guard<std::mutex> lock(logMutex());
+			std::cout << line;
+			if (level != LogLevel::Info)
+				std::cout.flush();
+		} catch (...) {
+			(void)std::fputs("[ERROR] Failed to write a log line\n", stderr);
+		}
+	}
+
+} // namespace detail
+
+template <typename... Args>
+void logInfo(LogFormat<std::type_identity_t<const Args &>...> format, const Args &...args) noexcept {
+	detail::writeLine(detail::LogLevel::Info, format, args...);
 }
 
-} // namespace ou::detail
+template <typename... Args>
+void logWarn(LogFormat<std::type_identity_t<const Args &>...> format, const Args &...args) noexcept {
+	detail::writeLine(detail::LogLevel::Warn, format, args...);
+}
 
-#define LOG_INFO(fmt, ...) ou::detail::writeLine(false, "[INFO] " fmt, ##__VA_ARGS__)
-#define LOG_WARN(fmt, ...) ou::detail::writeLine(true, "[WARNING] " fmt, ##__VA_ARGS__)
-#define LOG_ERROR(fmt, ...) ou::detail::writeLine(true, "[ERROR] " fmt, ##__VA_ARGS__)
+template <typename... Args>
+void logError(LogFormat<std::type_identity_t<const Args &>...> format, const Args &...args) noexcept {
+	detail::writeLine(detail::LogLevel::Error, format, args...);
+}
+
+} // namespace ou

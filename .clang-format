@@ -14,3 +14,4 @@ AlignConsecutiveDeclarations: false
 SortIncludes: true
 BreakBeforeBinaryOperators: All
 Cpp11BracedListStyle: false
+BreakTemplateDeclarations: Yes

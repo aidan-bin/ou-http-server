@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <expected>
 #include <format>
 #include <map>
 #include <optional>
@@ -17,7 +18,7 @@ namespace ou::http {
 
 enum class Method : uint8_t { GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS, CONNECT, TRACE };
 
-inline constexpr std::array<std::pair<std::string_view, Method>, 9> kMethodNames{ {
+inline constexpr auto kMethodNames = std::to_array<std::pair<std::string_view, Method>>({
 		{ "GET", Method::GET },
 		{ "POST", Method::POST },
 		{ "PUT", Method::PUT },
@@ -27,7 +28,7 @@ inline constexpr std::array<std::pair<std::string_view, Method>, 9> kMethodNames
 		{ "OPTIONS", Method::OPTIONS },
 		{ "CONNECT", Method::CONNECT },
 		{ "TRACE", Method::TRACE },
-} };
+});
 
 [[nodiscard]] constexpr std::optional<Method> stringToMethod(std::string_view method) {
 	for (const auto &[name, value] : kMethodNames) {
@@ -98,6 +99,8 @@ using Headers = std::map<std::string, std::string, CaseInsensitiveLess>;
 		return "Internal Server Error";
 	case 501:
 		return "Not Implemented";
+	case 505:
+		return "HTTP Version Not Supported";
 	default:
 		return "Unknown";
 	}
@@ -120,7 +123,9 @@ struct Request {
 
 	std::optional<sockaddr_in> clientAddr;
 
-	[[nodiscard]] static std::optional<Request> parse(std::string_view raw);
+	// Fails with the status to reject with (505 for a well-formed but unsupported version, else 400)
+	[[nodiscard]] static std::expected<Request, int> parse(std::string_view raw);
+
 	[[nodiscard]] std::optional<std::string_view> header(std::string_view name) const;
 	[[nodiscard]] std::optional<size_t> contentLength() const;
 
@@ -143,7 +148,8 @@ struct Response {
 
 } // namespace ou::http
 
-template <> struct std::formatter<ou::http::Method> : std::formatter<std::string_view> {
+template <>
+struct std::formatter<ou::http::Method> : std::formatter<std::string_view> {
 	auto format(const ou::http::Method &method, auto &ctx) const {
 		return std::formatter<std::string_view>::format(ou::http::methodToString(method), ctx);
 	}

@@ -43,17 +43,18 @@ Response KVStore::handle(const Request &request) {
 	const std::string &key = keyIt->second;
 
 	switch (request.method) {
-	case Method::GET: {
+		using enum Method;
+	case GET: {
 		const std::optional<std::string> value = get(key);
 		if (value) {
 			return Response::plainText(200, *value);
 		}
 		return Response::plainText(404, "Key not found");
 	}
-	case Method::PUT:
+	case PUT:
 		set(key, request.body);
 		return Response::plainText(200, "OK");
-	case Method::DELETE:
+	case DELETE:
 		if (remove(key)) {
 			return Response::plainText(200, "Deleted");
 		}

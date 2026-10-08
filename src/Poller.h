@@ -16,6 +16,7 @@ struct ReadyEvent {
 	int fd = -1;
 	bool readable = false;
 	bool writable = false;
+	bool woken = false;
 };
 
 // Waits on many sockets at once: epoll on Linux, kqueue on macOS/BSD, chosen at compile time.
@@ -31,6 +32,12 @@ public:
 	bool modify(int fd, Interest interest);
 	bool remove(int fd);
 
+	// Lets wake() interrupt wait()
+	bool enableWake();
+
+	// Interrupts wait() from another thread; needs enableWake()
+	void wake();
+
 	// Ready events, valid until the next wait()
 	[[nodiscard]] std::span<const ReadyEvent> wait(std::chrono::milliseconds timeout);
 
@@ -38,6 +45,7 @@ private:
 	static constexpr size_t kMaxEvents = 64;
 
 	UniqueFd queue_;
+	UniqueFd wakeFd_; // epoll only (kqueue needs no fd)
 	std::vector<ReadyEvent> ready_;
 };
 

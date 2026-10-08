@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <concepts>
 #include <ostream>
 #include <ranges>
 
@@ -25,7 +26,8 @@ namespace {
 	}
 
 	// NOLINTBEGIN(cppcoreguidelines-pro-bounds-pointer-arithmetic,bugprone-suspicious-stringview-data-usage)
-	template <typename T> std::optional<T> sParseNumber(std::string_view text, int base = 10) {
+	template <std::integral T>
+	std::optional<T> sParseNumber(std::string_view text, int base = 10) {
 		T value{};
 		const char *end = text.data() + text.size();
 		const auto [stopped, ec] = std::from_chars(text.data(), end, value, base);
@@ -34,6 +36,14 @@ namespace {
 		return value;
 	}
 	// NOLINTEND(cppcoreguidelines-pro-bounds-pointer-arithmetic,bugprone-suspicious-stringview-data-usage)
+
+	// "HTTP/" DIGIT "." DIGIT
+	bool sIsHttpVersion(std::string_view version) {
+		const auto isDigit = [](char ch) {
+			return ch >= '0' && ch <= '9';
+		};
+		return version.size() == 8 && version.starts_with("HTTP/") && isDigit(version[5]) && version[6] == '.' && isDigit(version[7]);
+	}
 
 	bool sHasToken(std::string_view fieldValue, std::string_view token) {
 		const auto listed = [token](const auto &part) {
@@ -132,7 +142,7 @@ std::string_view trim(std::string_view str) {
 	return str.substr(first, str.find_last_not_of(kWhitespace) - first + 1);
 }
 
-std::optional<Request> Request::parse(std::string_view raw) {
+std::expected<Request, int> Request::parse(std::string_view raw) {
 	const size_t headerEnd = raw.find("\r\n\r\n");
 	const std::string_view headerSection = raw.substr(0, headerEnd);
 	const std::string_view bodySection = (headerEnd != std::string_view::npos) ? raw.substr(headerEnd + 4) : std::string_view{};
@@ -140,19 +150,21 @@ std::optional<Request> Request::parse(std::string_view raw) {
 	auto [requestLine, headerLines] = sSplitAt(headerSection, '\n');
 	requestLine = trim(requestLine);
 	if (requestLine.empty())
-		return std::nullopt;
+		return std::unexpected(400);
 
 	auto [methodToken, afterMethod] = sSplitAt(requestLine, ' ');
 	auto [target, version] = sSplitAt(afterMethod, ' ');
 
 	const std::optional<Method> method = stringToMethod(trim(methodToken));
 	if (!method)
-		return std::nullopt;
+		return std::unexpected(400);
 
 	target = trim(target);
 	const std::string_view httpVersion = trim(version);
-	if (target.empty() || (httpVersion != "HTTP/1.0" && httpVersion != "HTTP/1.1"))
-		return std::nullopt;
+	if (target.empty() || !sIsHttpVersion(httpVersion))
+		return std::unexpected(400);
+	if (httpVersion != "HTTP/1.0" && httpVersion != "HTTP/1.1")
+		return std::unexpected(505);
 
 	Request request;
 	request.method = *method;
@@ -164,7 +176,7 @@ std::optional<Request> Request::parse(std::string_view raw) {
 		request.query = std::string(target.substr(queryStart + 1));
 
 	if (!request.path.starts_with('/'))
-		return std::nullopt;
+		return std::unexpected(400);
 
 	while (!headerLines.empty()) {
 		auto [line, remaining] = sSplitAt(headerLines, '\n');
@@ -176,16 +188,16 @@ std::optional<Request> Request::parse(std::string_view raw) {
 
 		const size_t colon = line.find(':');
 		if (colon == 0 || colon == std::string_view::npos)
-			return std::nullopt;
+			return std::unexpected(400);
 
 		const std::string_view name = line.substr(0, colon);
 		if (name.back() == ' ' || name.back() == '\t')
-			return std::nullopt;
+			return std::unexpected(400);
 
 		const std::string_view value = trim(line.substr(colon + 1));
 		const auto it = request.headers.find(name);
 		if (it != request.headers.end() && equalsIgnoreCase(name, "Content-Length") && it->second != value)
-			return std::nullopt;
+			return std::unexpected(400);
 		request.headers[std::string(name)] = value;
 	}
 

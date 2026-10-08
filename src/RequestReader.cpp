@@ -1,6 +1,7 @@
 #include "RequestReader.h"
 
 #include <algorithm>
+#include <expected>
 #include <utility>
 
 namespace ou::http {
@@ -48,9 +49,10 @@ RequestReader::Status RequestReader::parseBuffered() {
 	}
 
 	if (!request_) {
-		request_ = Request::parse(raw_);
-		if (!request_)
-			return reject(400);
+		std::expected<Request, int> parsed = Request::parse(raw_);
+		if (!parsed)
+			return reject(parsed.error());
+		request_ = std::move(*parsed);
 
 		// Chunked bodies aren't supported
 		if (request_->header("Transfer-Encoding"))

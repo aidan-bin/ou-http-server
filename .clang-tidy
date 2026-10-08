@@ -1,11 +1,12 @@
-Checks: '-*,modernize-*,readability-*,cppcoreguidelines-*,performance-*,bugprone-*,-modernize-use-designated-initializers,-*-magic-numbers,-llvmlibc-callee-namespace,-modernize-use-trailing-return-type,-readability-identifier-length,-readability-braces-around-statements,-cppcoreguidelines-pro-type-reinterpret-cast,-bugprone-easily-swappable-parameters,-cppcoreguidelines-avoid-const-or-ref-data-members'
+Checks: '-*,modernize-*,readability-*,cppcoreguidelines-*,performance-*,bugprone-*,-modernize-use-designated-initializers,-*-magic-numbers,-llvmlibc-callee-namespace,-modernize-use-trailing-return-type,-readability-identifier-length,-readability-braces-around-statements,-cppcoreguidelines-pro-type-reinterpret-cast,-bugprone-easily-swappable-parameters,-cppcoreguidelines-avoid-const-or-ref-data-members,-cppcoreguidelines-avoid-reference-coroutine-parameters'
 WarningsAsErrors: '*'
 UseColor: true
 CheckOptions:
   readability-identifier-naming.NamespaceCase: lower_case
   readability-identifier-naming.ClassCase: CamelCase
   readability-identifier-naming.StructCase: CamelCase
-  readability-identifier-naming.StructIgnoredRegexp: 'test_.*'
+  readability-identifier-naming.StructIgnoredRegexp: 'test_.*|promise_type'
+  readability-identifier-naming.FunctionIgnoredRegexp: '^(await_ready|await_suspend|await_resume|get_return_object|initial_suspend|final_suspend|return_value|unhandled_exception)$'
   readability-identifier-naming.EnumCase: CamelCase
   readability-identifier-naming.FunctionCase: camelBack
   readability-identifier-naming.ParameterCase: camelBack

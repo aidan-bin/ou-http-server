@@ -1,6 +1,7 @@
 #pragma once
 
 #include "HttpTypes.h"
+#include "Task.h"
 
 #include <chrono>
 #include <cstddef>
@@ -10,7 +11,7 @@
 
 namespace ou::http {
 
-using Dispatch = std::function<Response(Request request, const sockaddr_in &clientAddr)>;
+using Dispatch = std::function<Task<Response>(Request &request, const sockaddr_in &clientAddr)>;
 using Reject = std::function<Response(int status, const sockaddr_in &clientAddr)>;
 
 struct LoopConfig {

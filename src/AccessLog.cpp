@@ -2,9 +2,8 @@
 
 #include <chrono>
 #include <ctime>
+#include <format>
 #include <fstream>
-#include <iomanip>
-#include <sstream>
 #include <utility>
 
 namespace ou::http {
@@ -16,9 +15,8 @@ namespace {
 		std::tm tmStruct{};
 		localtime_r(&nowTime, &tmStruct);
 
-		std::ostringstream oss;
-		oss << std::put_time(&tmStruct, "%Y-%m-%d %H:%M:%S");
-		return oss.str();
+		return std::format("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", tmStruct.tm_year + 1900, tmStruct.tm_mon + 1, tmStruct.tm_mday,
+											 tmStruct.tm_hour, tmStruct.tm_min, tmStruct.tm_sec);
 	}
 
 	std::string sFormatLogEntry(const Request &request, const Response &response, const sockaddr_in &clientAddr) {

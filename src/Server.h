@@ -1,21 +1,25 @@
 #pragma once
 
 #include "ConnectionLoop.h"
+#include "HandlerPool.h"
 #include "HttpTypes.h"
 #include "SSLSocketHandler.h"
 #include "SocketHandler.h"
+#include "Task.h"
 #include "UniqueFd.h"
 
-#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <expected>
 #include <filesystem>
 #include <functional>
 #include <initializer_list>
 #include <map>
 #include <memory>
+#include <optional>
 #include <regex>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -43,7 +47,8 @@ public:
 
 class Server {
 public:
-	using Handler = std::function<Response(const Request &)>;
+	// Function or coroutine that handles a request and returns a response
+	using Handler = std::function<Task<Response>(const Request &)>;
 
 	enum class Model : uint8_t { ThreadPerCore, EventLoop };
 
@@ -60,6 +65,9 @@ public:
 		std::chrono::seconds readTimeout{ 10 };
 
 		bool keepAlive = true;
+
+		// (Event loop only) Threads for offload() work; 0 runs it inline
+		unsigned handlerThreads = 0;
 
 		// Loads files into memory at construction (up to this many bytes total). 0 disables.
 		// Files that don't fit are served from disk. Changes on disk afterwards are not seen.
@@ -108,7 +116,7 @@ protected:
 
 private:
 	struct PatternRoute {
-		Method method;
+		Method method = Method::GET;
 		std::regex pattern;
 		Handler handler;
 	};
@@ -119,25 +127,44 @@ private:
 	};
 
 	void preload();
-	void runLoop();
+	void runLoop(const std::stop_token &stop);
 
-	// Wraps handleRequest with what needs the connection (client address, keep-alive, and the log line)
-	[[nodiscard]] Response serve(Request request, const sockaddr_in &clientAddr) const;
+	// Runs middlewares, then the matching handler; may finish later if the handler suspends
+	[[nodiscard]] Task<Response> handle(Request &request) const;
+
+	// Finds the handler for a request; static files when none matches
+	[[nodiscard]] const Handler &handlerFor(const Request &request) const;
+
+	// Runs every middleware's postProcess; drops the body for HEAD
+	[[nodiscard]] Response postProcess(const Request &request, Response response) const;
+
+	// Handles a request for a loop, then post-processes and finalizes it; request must outlive the task
+	[[nodiscard]] Task<Response> serve(Request &request, const sockaddr_in &clientAddr) const;
+
+	// Post-processes a handled response and adds keep-alive and the log line
+	[[nodiscard]] Response finalize(const Request &request, Response response, bool keepAlive, std::string_view logLine) const;
+
+	// Finalizes a handler that suspended, once it returns; request must outlive the task
+	[[nodiscard]] Task<Response> finalizeLater(Task<Response> handled, const Request &request, bool keepAlive, std::string logLine) const;
+
+	// Maps a request path to a file under the serving root; fails with 404, or 403 (logged) outside the root
+	[[nodiscard]] std::expected<std::string, int> resolveTarget(const std::string &requestPath) const;
 
 	Config config_;
 	std::filesystem::path servingRoot_;
 	std::unordered_map<std::string, PreloadedFile> preloaded_;
 	uint16_t port_ = 0;
-	std::atomic<bool> running_{ false };
-	std::vector<std::thread> threads_;
+	std::vector<std::jthread> threads_;
 	UniqueFd listenSocket_; // Shared by every worker thread
 
 	// Exact paths are looked up; patterns are tried in registration order
 	std::map<std::pair<Method, std::string>, Handler> pathHandlers_;
 	std::vector<PatternRoute> patternHandlers_;
+	Handler staticFiles_;
 	std::vector<std::shared_ptr<Middleware>> middlewares_;
 
 	std::unique_ptr<SocketHandler> socketHandler_;
+	std::optional<HandlerPool> pool_;
 };
 
 } // namespace ou::http

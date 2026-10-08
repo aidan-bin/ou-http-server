@@ -3,6 +3,7 @@
 #include <boost/test/included/unit_test.hpp>
 
 #include "AccessLog.h"
+#include "Awaitables.h"
 #include "HttpTypes.h"
 #include "KVStore.h"
 #include "Logging.h"
@@ -17,6 +18,7 @@
 #include <charconv>
 #include <chrono>
 #include <concepts>
+#include <expected>
 #include <fcntl.h>
 #include <filesystem>
 #include <format>
@@ -28,6 +30,7 @@
 #include <ostream>
 #include <ranges>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <sys/socket.h>
 
@@ -85,7 +88,7 @@ std::vector<std::string> sLines(const std::filesystem::path &path) {
 bool sContains(std::string_view haystack, std::string_view needle) { return haystack.find(needle) != std::string_view::npos; }
 
 Request sParse(std::string_view raw) {
-	std::optional<Request> parsed = Request::parse(raw);
+	std::expected<Request, int> parsed = Request::parse(raw);
 	BOOST_REQUIRE(parsed.has_value());
 	return std::move(*parsed);
 }
@@ -157,17 +160,32 @@ constexpr auto kMalformedRequests = std::to_array<std::string_view>({
 		"GET / HTTP/1.1\r\nContent-Length : 4\r\n\r\nabcd",
 		"GET / HTTP/1.1\r\nContent-Length\t: 4\r\n\r\nabcd",
 		"POST / HTTP/1.1\r\nContent-Length: 1\r\ncontent-length: 2\r\n\r\nab",
-		"GET / HTTP/2.0\r\n\r\n",
-		"GET / HTTP/9.9\r\n\r\n",
 		"GET / HTTP/\r\n\r\n",
+		"GET / HTTP/1\r\n\r\n",
+		"GET / HTTP/1.10\r\n\r\n",
+		"GET / http/1.1\r\n\r\n",
 });
 
 BOOST_DATA_TEST_CASE(test_malformed_requests_are_rejected, bdata::make(kMalformedRequests), raw) {
-	BOOST_CHECK(!Request::parse(raw).has_value());
+	BOOST_CHECK_EQUAL(Request::parse(raw).error_or(0), 400);
 
 	RequestReader reader(1024);
 	BOOST_CHECK(reader.consume(raw) == RequestReader::Status::Rejected);
 	BOOST_CHECK_EQUAL(reader.rejectStatus(), 400);
+}
+
+constexpr auto kUnsupportedVersions = std::to_array<std::string_view>({
+		"GET / HTTP/2.0\r\n\r\n",
+		"GET / HTTP/9.9\r\n\r\n",
+		"GET / HTTP/0.9\r\n\r\n",
+});
+
+BOOST_DATA_TEST_CASE(test_unsupported_versions_are_rejected_with_505, bdata::make(kUnsupportedVersions), raw) {
+	BOOST_CHECK_EQUAL(Request::parse(raw).error_or(0), 505);
+
+	RequestReader reader(1024);
+	BOOST_CHECK(reader.consume(raw) == RequestReader::Status::Rejected);
+	BOOST_CHECK_EQUAL(reader.rejectStatus(), 505);
 }
 
 BOOST_AUTO_TEST_CASE(test_request_headers_are_case_insensitive) {
@@ -332,6 +350,23 @@ BOOST_AUTO_TEST_CASE(test_custom_handler_and_middleware) {
 	BOOST_CHECK_EQUAL(server.handleRequest(sMakeRequest("/unknown")).statusCode, 404);
 }
 
+BOOST_AUTO_TEST_CASE(test_coroutine_handler_routes_like_any_other) {
+	TestServer server(sConfig("."));
+	server.addMiddleware(std::make_shared<TestMiddleware>());
+	const auto napping = [](const Request &) -> ou::Task<Response> {
+		co_await sleepFor(std::chrono::milliseconds(1));
+		co_return Response::plainText(200, "rested");
+	};
+	server.registerPathHandler({ Method::GET, Method::HEAD }, "/nap", napping);
+	server.registerPatternHandler(Method::GET, R"(/nap/\d+)", napping);
+	server.registerPathHandler(Method::GET, "/middleware", napping);
+
+	BOOST_CHECK_EQUAL(server.handleRequest(sMakeRequest("/nap")).body, "rested");
+	BOOST_CHECK_EQUAL(server.handleRequest(sMakeRequest("/nap/7")).body, "rested");
+	BOOST_CHECK(server.handleRequest(sMakeRequest("/nap", Method::HEAD)).body.empty());
+	BOOST_CHECK_EQUAL(server.handleRequest(sMakeRequest("/middleware")).body, "Intercepted by Middleware");
+}
+
 BOOST_AUTO_TEST_CASE(test_multi_method_registration) {
 	TestServer server(sConfig("."));
 	server.registerPathHandler({ Method::GET, Method::PUT }, "/multi",
@@ -349,6 +384,8 @@ BOOST_AUTO_TEST_CASE(test_static_file_serving_and_mime_types) {
 	root.write("page.html", "<h1>hi</h1>");
 	root.write("notes.txt", "plain");
 	root.write("blob.bin", "\x01\x02");
+	root.write("UPPER.TXT", "loud");
+	root.write(".html", "dotfile");
 
 	TestServer server(sConfig(root.path()));
 
@@ -359,6 +396,8 @@ BOOST_AUTO_TEST_CASE(test_static_file_serving_and_mime_types) {
 
 	BOOST_CHECK_EQUAL(server.handleStaticFileRequest(sMakeRequest("/notes.txt")).headers.at("Content-Type"), "text/plain");
 	BOOST_CHECK_EQUAL(server.handleStaticFileRequest(sMakeRequest("/blob.bin")).headers.at("Content-Type"), "application/octet-stream");
+	BOOST_CHECK_EQUAL(server.handleStaticFileRequest(sMakeRequest("/UPPER.TXT")).headers.at("Content-Type"), "text/plain");
+	BOOST_CHECK_EQUAL(server.handleStaticFileRequest(sMakeRequest("/.html")).headers.at("Content-Type"), "application/octet-stream");
 	BOOST_CHECK_EQUAL(server.handleStaticFileRequest(sMakeRequest("/missing.txt")).statusCode, 404);
 }
 
@@ -390,6 +429,8 @@ BOOST_AUTO_TEST_CASE(test_skip_symlink_check_still_blocks_traversal) {
 
 	BOOST_CHECK_EQUAL(server.handleStaticFileRequest(sMakeRequest("/public.txt")).body, "public");
 	BOOST_CHECK_EQUAL(server.handleStaticFileRequest(sMakeRequest("/link.txt")).body, "secret");
+	BOOST_CHECK_EQUAL(server.handleStaticFileRequest(sMakeRequest("/./nope/../public.txt")).body, "public");
+	BOOST_CHECK_EQUAL(server.handleStaticFileRequest(sMakeRequest("//public.txt")).body, "public");
 	BOOST_CHECK_EQUAL(server.handleStaticFileRequest(sMakeRequest("/../secret.txt")).statusCode, 403);
 	BOOST_CHECK_EQUAL(server.handleStaticFileRequest(sMakeRequest("/subdir/../../secret.txt")).statusCode, 403);
 	BOOST_CHECK_EQUAL(server.handleStaticFileRequest(sParse("GET /..%2Fsecret.txt HTTP/1.1\r\n\r\n")).statusCode, 403);
@@ -522,6 +563,32 @@ BOOST_AUTO_TEST_CASE(test_poller_readiness) {
 	BOOST_CHECK(poller.wait(10ms).empty());
 }
 
+BOOST_AUTO_TEST_CASE(test_poller_wake) {
+	ou::Poller poller;
+	BOOST_REQUIRE(poller.enableWake());
+
+	using namespace std::chrono_literals;
+	BOOST_CHECK(poller.wait(10ms).empty());
+
+	const auto start = std::chrono::steady_clock::now();
+	const std::jthread waker([&poller] {
+		std::this_thread::sleep_for(50ms);
+		poller.wake();
+	});
+	std::span<const ou::ReadyEvent> ready = poller.wait(5s);
+	BOOST_CHECK_LT(std::chrono::steady_clock::now() - start, 2s);
+	BOOST_REQUIRE_EQUAL(ready.size(), 1U);
+	BOOST_CHECK(ready[0].woken);
+
+	poller.wake();
+	poller.wake();
+	poller.wake();
+	ready = poller.wait(500ms);
+	BOOST_REQUIRE_EQUAL(ready.size(), 1U);
+	BOOST_CHECK(ready[0].woken);
+	BOOST_CHECK(poller.wait(10ms).empty());
+}
+
 // --- Access log ---
 
 BOOST_AUTO_TEST_CASE(test_access_log_middleware) {
@@ -599,7 +666,7 @@ BOOST_AUTO_TEST_CASE(test_access_log_concurrent_writes) {
 
 	constexpr int kThreadCount = 4;
 	constexpr int kPerThread = 25;
-	std::vector<std::thread> threads;
+	std::vector<std::jthread> threads;
 	threads.reserve(kThreadCount);
 	for (int i = 0; i < kThreadCount; ++i) {
 		threads.emplace_back([&accessLog, &response]() {
@@ -608,8 +675,7 @@ BOOST_AUTO_TEST_CASE(test_access_log_concurrent_writes) {
 				accessLog.postProcess(request, response);
 		});
 	}
-	for (std::thread &thread : threads)
-		thread.join();
+	threads.clear();
 
 	BOOST_CHECK_EQUAL(sLines(logPath).size(), static_cast<size_t>(kThreadCount * kPerThread));
 }
@@ -752,7 +818,7 @@ BOOST_DATA_TEST_CASE(test_server_round_trip, bdata::make(kModels), model) {
 
 	BOOST_CHECK(sRoundTrip(port, "GET /nope.txt HTTP/1.1\r\nHost: x\r\n\r\n").starts_with("HTTP/1.1 404"));
 	BOOST_CHECK(sRoundTrip(port, "BOGUS / HTTP/1.1\r\nHost: x\r\n\r\n").starts_with("HTTP/1.1 400"));
-	BOOST_CHECK(sRoundTrip(port, "GET /hello.txt HTTP/2.0\r\nHost: x\r\n\r\n").starts_with("HTTP/1.1 400"));
+	BOOST_CHECK(sRoundTrip(port, "GET /hello.txt HTTP/2.0\r\nHost: x\r\n\r\n").starts_with("HTTP/1.1 505"));
 	BOOST_CHECK(
 			sRoundTrip(port, "POST /hello.txt HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n").starts_with("HTTP/1.1 501"));
 
@@ -848,6 +914,156 @@ BOOST_AUTO_TEST_CASE(test_event_loop_closes_idle_connection) {
 
 	const ou::UniqueFd fd = sConnect(server.port());
 	sCheckClosed(fd);
+}
+
+namespace {
+
+constexpr auto kSlowHandler = std::chrono::milliseconds(400);
+
+ou::Task<Response> sNap(const Request & /*request*/) {
+	co_await sleepFor(kSlowHandler);
+	co_return Response::plainText(200, "rested");
+}
+
+ou::Task<Response> sSlowWork(const Request & /*request*/) {
+	co_return co_await offload([] {
+		std::this_thread::sleep_for(kSlowHandler);
+		return Response::plainText(200, "slow");
+	});
+}
+
+Response sFast(const Request & /*request*/) { return Response::plainText(200, "fast"); }
+
+// Checks a throwing handler closes its connection, whether it throws directly, after a sleep, or from offloaded work
+void sCheckThrowingHandlerCloses(const Server::Config &config) {
+	Server server(config);
+	server.registerPathHandler(Method::GET, "/throw", [](const Request &) -> Response { throw std::runtime_error("handler failed"); });
+	server.registerPathHandler(Method::GET, "/throw-after-sleep", [](const Request &) -> ou::Task<Response> {
+		co_await sleepFor(std::chrono::milliseconds(10));
+		throw std::runtime_error("handler failed");
+	});
+	server.registerPathHandler(Method::GET, "/throw-offloaded", [](const Request &) -> ou::Task<Response> {
+		co_return co_await offload([]() -> Response { throw std::runtime_error("work failed"); });
+	});
+	BOOST_REQUIRE(server.start());
+
+	for (const std::string_view path : { "/throw", "/throw-after-sleep", "/throw-offloaded" }) {
+		const ou::UniqueFd fd = sConnect(server.port());
+		sSend(fd, std::format("GET {} HTTP/1.1\r\nHost: x\r\n\r\n", path));
+		sCheckClosed(fd);
+	}
+}
+
+} // namespace
+
+BOOST_DATA_TEST_CASE(test_handler_exception_closes_connection, bdata::make(kModels), model) {
+	const TempDir root("throwing");
+	sCheckThrowingHandlerCloses(sConfig(root.path(), model));
+}
+
+BOOST_AUTO_TEST_CASE(test_handler_pool_exception_closes_connection) {
+	const TempDir root("pool-throwing");
+	Server::Config config = sConfig(root.path(), Server::Model::EventLoop);
+	config.handlerThreads = 1;
+	sCheckThrowingHandlerCloses(config);
+}
+
+BOOST_DATA_TEST_CASE(test_coroutine_handler_round_trip, bdata::make(kModels), model) {
+	const TempDir root("coroutine");
+	Server server(sConfig(root.path(), model));
+	server.registerPathHandler(Method::GET, "/nap", sNap);
+	BOOST_REQUIRE(server.start());
+
+	const std::string response = sRoundTrip(server.port(), "GET /nap HTTP/1.1\r\nHost: x\r\n\r\n");
+	BOOST_CHECK(response.starts_with("HTTP/1.1 200 OK"));
+	BOOST_CHECK(response.ends_with("rested"));
+}
+
+BOOST_AUTO_TEST_CASE(test_event_loop_sleeps_without_holding_its_thread) {
+	const TempDir root("sleep-concurrency");
+	Server::Config config = sConfig(root.path(), Server::Model::EventLoop);
+	config.threadCount = 1; // A sleep holding the thread would serve these one after another
+	Server server(config);
+	server.registerPathHandler(Method::GET, "/nap", sNap);
+	BOOST_REQUIRE(server.start());
+
+	std::vector<ou::UniqueFd> clients;
+	clients.reserve(8);
+	for (int i = 0; i < 8; ++i)
+		clients.push_back(sConnect(server.port()));
+
+	const auto start = std::chrono::steady_clock::now();
+	for (const ou::UniqueFd &client : clients)
+		sSend(client, "GET /nap HTTP/1.1\r\nHost: x\r\n\r\n");
+	for (const ou::UniqueFd &client : clients)
+		BOOST_CHECK(sReadResponse(client).ends_with("rested"));
+	BOOST_CHECK_LT(std::chrono::steady_clock::now() - start, kSlowHandler * 2);
+}
+
+BOOST_AUTO_TEST_CASE(test_event_loop_drops_a_sleep_whose_client_left) {
+	const TempDir root("sleep-abandoned");
+	Server::Config config = sConfig(root.path(), Server::Model::EventLoop);
+	config.threadCount = 1;
+	Server server(config);
+	server.registerPathHandler(Method::GET, "/nap", sNap);
+	server.registerPathHandler(Method::GET, "/fast", sFast);
+	BOOST_REQUIRE(server.start());
+
+	{
+		const ou::UniqueFd leaving = sConnect(server.port());
+		sSend(leaving, "GET /nap HTTP/1.1\r\nHost: x\r\n\r\n");
+	}
+
+	// The next connection likely reuses the closed fd; the old sleep's timer must not resume it
+	const ou::UniqueFd staying = sConnect(server.port());
+	sSend(staying, "GET /nap HTTP/1.1\r\nHost: x\r\n\r\n");
+	BOOST_CHECK(sReadResponse(staying).ends_with("rested"));
+	BOOST_CHECK(sRoundTrip(server.port(), "GET /fast HTTP/1.1\r\nHost: x\r\n\r\n").ends_with("fast"));
+}
+
+BOOST_AUTO_TEST_CASE(test_handler_pool_keeps_slow_work_off_the_loop) {
+	const TempDir root("pool-slow");
+	Server::Config config = sConfig(root.path(), Server::Model::EventLoop);
+	config.handlerThreads = 2;
+	config.threadCount = 1; // Without the pool, /fast would wait behind /slow on this one loop thread
+	Server server(config);
+	server.registerPathHandler(Method::GET, "/slow", sSlowWork);
+	server.registerPathHandler(Method::GET, "/fast", sFast);
+	BOOST_REQUIRE(server.start());
+
+	const ou::UniqueFd slow = sConnect(server.port());
+	sSend(slow, "GET /slow HTTP/1.1\r\nHost: x\r\n\r\n");
+	std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+	const auto start = std::chrono::steady_clock::now();
+	BOOST_CHECK(sRoundTrip(server.port(), "GET /fast HTTP/1.1\r\nHost: x\r\n\r\n").ends_with("fast"));
+	BOOST_CHECK_LT(std::chrono::steady_clock::now() - start, kSlowHandler / 2);
+
+	BOOST_CHECK(sReadResponse(slow).ends_with("slow"));
+}
+
+BOOST_AUTO_TEST_CASE(test_handler_pool_stop_discards_queued_jobs) {
+	const TempDir root("pool-stop");
+	Server::Config config = sConfig(root.path(), Server::Model::EventLoop);
+	config.handlerThreads = 1;
+	Server server(config);
+	server.registerPathHandler(Method::GET, "/slow", sSlowWork);
+	BOOST_REQUIRE(server.start());
+
+	// One pool thread: the first request runs, the second queues behind it
+	const ou::UniqueFd running = sConnect(server.port());
+	const ou::UniqueFd queued = sConnect(server.port());
+	sSend(running, "GET /slow HTTP/1.1\r\nHost: x\r\n\r\n");
+	std::this_thread::sleep_for(std::chrono::milliseconds(50));
+	sSend(queued, "GET /slow HTTP/1.1\r\nHost: x\r\n\r\n");
+	std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+	// Waits out the running job only; draining the queue too would take two handler durations
+	const auto start = std::chrono::steady_clock::now();
+	server.stop();
+	BOOST_CHECK_LT(std::chrono::steady_clock::now() - start, kSlowHandler * 3 / 2);
+
+	sCheckClosed(queued);
 }
 
 #ifndef DISABLE_HTTPS

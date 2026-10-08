@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 project(ou_http_server)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -12,6 +12,11 @@ list(REMOVE_ITEM HTTP_LIB_SOURCES ${CMAKE_SOURCE_DIR}/src/main.cpp)
 option(DISABLE_HTTPS "Disable HTTPS support" OFF)
 
 add_compile_options(-Wall -Wextra -Werror)
+
+if (CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
+	add_compile_options(-fexperimental-library)
+	add_link_options(-fexperimental-library)
+endif()
 
 find_package(OpenSSL)
 

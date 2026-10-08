@@ -6,8 +6,11 @@
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <expected>
 #include <format>
+#include <functional>
 #include <optional>
+#include <ranges>
 #include <span>
 #include <system_error>
 #include <utility>
@@ -20,7 +23,7 @@
 
 namespace {
 
-constexpr std::array<std::pair<std::string_view, std::string_view>, 14> kMimeTypes{ {
+constexpr auto kMimeTypes = std::to_array<std::pair<std::string_view, std::string_view>>({
 		{ ".html", "text/html" },
 		{ ".htm", "text/html" },
 		{ ".css", "text/css" },
@@ -35,10 +38,18 @@ constexpr std::array<std::pair<std::string_view, std::string_view>, 14> kMimeTyp
 		{ ".gif", "image/gif" },
 		{ ".ico", "image/vnd.microsoft.icon" },
 		{ ".wasm", "application/wasm" },
-} };
+});
 
-std::string_view sMimeTypeFor(const std::filesystem::path &path) {
-	const std::string extension = path.extension().string();
+// Finds the filename's extension as path::extension() does; empty for a dotfile like ".html"
+std::string_view sExtension(std::string_view path) {
+	const size_t dot = path.find_last_of("./");
+	if (dot == std::string_view::npos || path[dot] != '.' || dot == 0 || path[dot - 1] == '/')
+		return {};
+	return path.substr(dot);
+}
+
+std::string_view sMimeTypeFor(std::string_view path) {
+	const std::string_view extension = sExtension(path);
 	for (const auto &[suffix, type] : kMimeTypes) {
 		if (ou::http::equalsIgnoreCase(extension, suffix))
 			return type;
@@ -52,9 +63,30 @@ bool sIsWithin(const std::filesystem::path &candidate, const std::filesystem::pa
 	return mismatched.in1 == root.end();
 }
 
-ou::UniqueFd sOpenReadOnly(const std::filesystem::path &path) {
+ou::UniqueFd sOpenReadOnly(const std::string &path) {
 	// NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg) open() is variadic
 	return ou::UniqueFd(::open(path.c_str(), O_RDONLY | O_CLOEXEC));
+}
+
+// Applies "." and ".." like lexically_normal(), without its per-segment allocations; null if ".." climbs above the root
+std::optional<std::string> sNormalizePath(std::string_view path) {
+	std::string normalized;
+	for (const auto part : std::views::split(path, '/')) {
+		const std::string_view segment(part.begin(), part.end());
+		if (segment.empty() || segment == ".")
+			continue;
+
+		if (segment == "..") {
+			if (normalized.empty())
+				return std::nullopt;
+			normalized.resize(normalized.rfind('/'));
+			continue;
+		}
+
+		normalized += '/';
+		normalized += segment;
+	}
+	return normalized;
 }
 
 // Reads up to size bytes
@@ -136,11 +168,11 @@ std::string sGenerateDirectoryIndex(const std::string &requestPath, const std::f
 
 namespace ou::http {
 
-Server::Server(Config config) : config_(std::move(config)) {
+Server::Server(Config config) : config_(std::move(config)), staticFiles_(std::bind_front(&Server::handleStaticFileRequest, this)) {
 	std::error_code ec;
 	servingRoot_ = std::filesystem::weakly_canonical(config_.servingDirectory, ec);
 	if (ec) {
-		LOG_ERROR("Cannot resolve serving directory: {}", config_.servingDirectory.string());
+		logError("Cannot resolve serving directory: {}", config_.servingDirectory.string());
 		servingRoot_.clear();
 		return;
 	}
@@ -169,25 +201,25 @@ void Server::preload() {
 			continue;
 		}
 
-		const UniqueFd file = sOpenReadOnly(target);
+		const UniqueFd file = sOpenReadOnly(target.native());
 		std::optional<std::string> body = file ? sReadFile(file.get(), size) : std::nullopt;
 		if (!body)
 			continue;
 
 		total += body->size();
 		const std::string requestPath = "/" + it->path().lexically_relative(servingRoot_).generic_string();
-		preloaded_.emplace(requestPath, PreloadedFile{ .body = std::move(*body), .contentType = sMimeTypeFor(target) });
+		preloaded_.emplace(requestPath, PreloadedFile{ .body = std::move(*body), .contentType = sMimeTypeFor(target.native()) });
 	}
 
-	LOG_INFO("Preloaded {} files ({} bytes)", preloaded_.size(), total);
+	logInfo("Preloaded {} files ({} bytes)", preloaded_.size(), total);
 	if (skipped > 0)
-		LOG_WARN("{} files did not fit in preloadBytes and will be served from disk", skipped);
+		logWarn("{} files did not fit in preloadBytes and will be served from disk", skipped);
 }
 
 Server::~Server() { stop(); }
 
 bool Server::start() {
-	LOG_INFO("Starting server with {} threads...", config_.threadCount);
+	logInfo("Starting server with {} threads...", config_.threadCount);
 
 	try {
 #ifndef DISABLE_HTTPS
@@ -199,20 +231,20 @@ bool Server::start() {
 			socketHandler_ = std::make_unique<PlainSocketHandler>();
 		}
 	} catch (const std::exception &e) {
-		LOG_ERROR("Failed to initialize socket handler: {}", e.what());
+		logError("Failed to initialize socket handler: {}", e.what());
 		return false;
 	}
 
 	UniqueFd serverSocket(socket(AF_INET, SOCK_STREAM, 0));
 	if (!serverSocket) {
-		LOG_ERROR("Failed to create socket");
+		logError("Failed to create socket");
 		return false;
 	}
 
 	// Lets a restarted server rebind while the old socket's connections sit in TIME_WAIT
 	const int enable = 1;
 	if (setsockopt(serverSocket.get(), SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(enable)) < 0) {
-		LOG_ERROR("Failed to set SO_REUSEADDR");
+		logError("Failed to set SO_REUSEADDR");
 		return false;
 	}
 
@@ -222,54 +254,55 @@ bool Server::start() {
 	addr.sin_port = htons(config_.port);
 
 	if (bind(serverSocket.get(), reinterpret_cast<struct sockaddr *>(&addr), sizeof(addr)) < 0) {
-		LOG_ERROR("Failed to bind socket");
+		logError("Failed to bind socket");
 		return false;
 	}
 
 	if (listen(serverSocket.get(), SOMAXCONN) < 0) {
-		LOG_ERROR("Failed to listen on socket");
+		logError("Failed to listen on socket");
 		return false;
 	}
 
 	// Non-blocking so the accept loop can poll and notice stop() without being closed out from under it
 	if (!setNonBlocking(serverSocket.get(), true)) {
-		LOG_ERROR("Failed to set socket non-blocking");
+		logError("Failed to set socket non-blocking");
 		return false;
 	}
 
 	sockaddr_in bound{};
 	socklen_t boundLength = sizeof(bound);
 	if (getsockname(serverSocket.get(), reinterpret_cast<struct sockaddr *>(&bound), &boundLength) < 0) {
-		LOG_ERROR("Failed to read the bound port");
+		logError("Failed to read the bound port");
 		return false;
 	}
 	port_ = ntohs(bound.sin_port);
 
-	LOG_INFO("Server socket {} bound and listening on port {}...", serverSocket.get(), port_);
+	logInfo("Server socket {} bound and listening on port {}...", serverSocket.get(), port_);
 	listenSocket_ = std::move(serverSocket);
 
-	running_.store(true);
+	if (config_.model == Model::EventLoop && config_.handlerThreads > 0)
+		pool_.emplace(config_.handlerThreads);
+
 	for (unsigned i = 0; i < config_.threadCount; ++i) {
-		threads_.emplace_back([this]() { runLoop(); });
+		threads_.emplace_back([this](const std::stop_token &stop) { runLoop(stop); });
 	}
 	return true;
 }
 
 void Server::stop() {
-	running_.store(false);
 	if (!listenSocket_ && threads_.empty())
 		return;
 
-	LOG_INFO("Stopping server...");
+	logInfo("Stopping server...");
 
-	for (std::thread &thread : threads_) {
-		if (thread.joinable())
-			thread.join();
-	}
+	if (pool_)
+		pool_->stop();
+	for (std::jthread &thread : threads_)
+		thread.request_stop();
 	threads_.clear();
 	listenSocket_.reset();
 
-	LOG_INFO("Server stopped");
+	logInfo("Server stopped");
 }
 
 void Server::addMiddleware(std::shared_ptr<Middleware> middleware) { middlewares_.push_back(std::move(middleware)); }
@@ -294,51 +327,51 @@ void Server::registerPatternHandler(std::initializer_list<Method> methods, const
 	}
 }
 
-void Server::runLoop() {
+void Server::runLoop(const std::stop_token &stop) {
 	const LoopConfig config{ .listenSocket = listenSocket_.get(),
 													 .maxRequestBytes = config_.maxRequestBytes,
 													 .idleTimeout = config_.readTimeout };
 
-	const Dispatch dispatch = [this](Request request, const sockaddr_in &clientAddr) {
-		return serve(std::move(request), clientAddr);
+	const Dispatch dispatch = [this](Request &request, const sockaddr_in &clientAddr) {
+		return serve(request, clientAddr);
 	};
 	const Reject reject = [this](int status, const sockaddr_in &clientAddr) {
 		return rejectRequest(status, clientAddr);
 	};
 
 	if (config_.model == Model::EventLoop) {
-		EventLoop loop(config, *socketHandler_, dispatch, reject);
-		loop.run(running_);
+		EventLoop loop(config, *socketHandler_, dispatch, reject, pool_ ? &*pool_ : nullptr);
+		loop.run(stop);
 		return;
 	}
 
 	BlockingLoop loop(config, *socketHandler_, dispatch, reject);
-	loop.run(running_);
+	loop.run(stop);
 }
 
-Response Server::handleRequest(Request request) const {
+Task<Response> Server::handle(Request &request) const {
 	Response response;
+	for (const auto &middleware : middlewares_) {
+		if (middleware->process(request, response))
+			return response;
+	}
 
-	const auto dispatch = [&]() -> Response {
-		for (const auto &middleware : middlewares_) {
-			if (middleware->process(request, response))
-				return response;
-		}
+	return handlerFor(request)(request);
+}
 
-		const auto pathHandler = pathHandlers_.find({ request.method, request.path });
-		if (pathHandler != pathHandlers_.end())
-			return pathHandler->second(request);
+const Server::Handler &Server::handlerFor(const Request &request) const {
+	if (const auto path = pathHandlers_.find({ request.method, request.path }); path != pathHandlers_.end())
+		return path->second;
 
-		for (const PatternRoute &route : patternHandlers_) {
-			if (route.method == request.method && std::regex_match(request.path, route.pattern))
-				return route.handler(request);
-		}
+	for (const PatternRoute &pattern : patternHandlers_) {
+		if (pattern.method == request.method && std::regex_match(request.path, pattern.pattern))
+			return pattern.handler;
+	}
 
-		return handleStaticFileRequest(request);
-	};
+	return staticFiles_;
+}
 
-	response = dispatch();
-
+Response Server::postProcess(const Request &request, Response response) const {
 	for (const auto &middleware : middlewares_) {
 		middleware->postProcess(request, response);
 	}
@@ -349,21 +382,41 @@ Response Server::handleRequest(Request request) const {
 	return response;
 }
 
-Response Server::serve(Request request, const sockaddr_in &clientAddr) const {
-	request.clientAddr = clientAddr;
-	const bool keepAlive = config_.keepAlive && request.wantsKeepAlive();
+Response Server::handleRequest(Request request) const {
+	Task<Response> handled = handle(request);
+	return postProcess(request, handled.result());
+}
 
-	const std::string requestLine = config_.logRequests ? std::format("{} {}", request.method, request.path) : std::string();
-	Response response = handleRequest(std::move(request));
+Task<Response> Server::serve(Request &request, const sockaddr_in &clientAddr) const {
+	request.clientAddr = clientAddr;
+
+	// Taken before handling; middlewares may rewrite the request
+	const bool keepAlive = config_.keepAlive && request.wantsKeepAlive();
+	std::string logLine
+			= config_.logRequests ? std::format("{} {} from {}", request.method, request.path, addressToString(clientAddr)) : std::string();
+
+	Task<Response> handled = handle(request);
+	if (handled.done())
+		return finalize(request, handled.result(), keepAlive, logLine);
+	return finalizeLater(std::move(handled), request, keepAlive, std::move(logLine));
+}
+
+Response Server::finalize(const Request &request, Response response, bool keepAlive, std::string_view logLine) const {
+	response = postProcess(request, std::move(response));
 	response.keepAlive = keepAlive;
 
 	if (config_.logRequests)
-		LOG_INFO("{} from {} -> {}", requestLine, addressToString(clientAddr), response.statusCode);
+		logInfo("{} -> {}", logLine, response.statusCode);
 	return response;
 }
 
+Task<Response> Server::finalizeLater(Task<Response> handled, const Request &request, bool keepAlive, std::string logLine) const {
+	Response response = co_await handled;
+	co_return finalize(request, std::move(response), keepAlive, logLine);
+}
+
 Response Server::rejectRequest(int status, const sockaddr_in &clientAddr) const {
-	LOG_WARN("Rejecting request from {} with status {}", addressToString(clientAddr), status);
+	logWarn("Rejecting request from {} with status {}", addressToString(clientAddr), status);
 
 	Request request;
 	request.clientAddr = clientAddr;
@@ -374,6 +427,24 @@ Response Server::rejectRequest(int status, const sockaddr_in &clientAddr) const 
 	}
 
 	return response;
+}
+
+std::expected<std::string, int> Server::resolveTarget(const std::string &requestPath) const {
+	if (config_.skipSymlinkCheck) {
+		const std::optional<std::string> normalized = sNormalizePath(requestPath);
+		if (normalized)
+			return servingRoot_.native() + *normalized;
+	} else {
+		std::error_code ec;
+		const std::filesystem::path canonical = std::filesystem::weakly_canonical(servingRoot_ / std::string_view(requestPath).substr(1), ec);
+		if (ec)
+			return std::unexpected(404);
+		if (sIsWithin(canonical, servingRoot_))
+			return canonical.native();
+	}
+
+	logWarn("Rejected path outside serving directory: {}", requestPath);
+	return std::unexpected(403);
 }
 
 Response Server::handleStaticFileRequest(const Request &request) const {
@@ -390,39 +461,32 @@ Response Server::handleStaticFileRequest(const Request &request) const {
 		return response;
 	}
 
-	std::error_code ec;
-	const std::filesystem::path requested = servingRoot_ / std::string_view(request.path).substr(1);
-	const std::filesystem::path target
-			= config_.skipSymlinkCheck ? requested.lexically_normal() : std::filesystem::weakly_canonical(requested, ec);
-	if (ec)
-		return Response::error(404);
+	const std::expected<std::string, int> target = resolveTarget(request.path);
+	if (!target)
+		return Response::error(target.error());
 
-	if (!sIsWithin(target, servingRoot_)) {
-		LOG_WARN("Rejected path outside serving directory: {}", request.path);
-		return Response::error(403);
-	}
-
-	const UniqueFd file = sOpenReadOnly(target);
+	const UniqueFd file = sOpenReadOnly(*target);
 	if (!file && (errno == ENOENT || errno == ENOTDIR)) {
-		LOG_ERROR("File not found: {}", target.string());
+		logError("File not found: {}", *target);
 		return Response::error(404);
 	}
 
 	struct stat targetStatus{};
 	if (!file || ::fstat(file.get(), &targetStatus) < 0) {
-		LOG_ERROR("Failed to open file: {}", target.string());
+		logError("Failed to open file: {}", *target);
 		return Response::error(500);
 	}
 
 	if (S_ISDIR(targetStatus.st_mode)) {
 		if (!config_.enableDirectoryIndexing) {
-			LOG_WARN("Directory indexing is disabled, returning 403 Forbidden.");
+			logWarn("Directory indexing is disabled, returning 403 Forbidden");
 			return Response::error(403);
 		}
 
-		std::string indexHtml = sGenerateDirectoryIndex(request.path, target, ec);
+		std::error_code ec;
+		std::string indexHtml = sGenerateDirectoryIndex(request.path, *target, ec);
 		if (ec) {
-			LOG_ERROR("Failed to list directory: {}", target.string());
+			logError("Failed to list directory: {}", *target);
 			return Response::error(500);
 		}
 
@@ -434,12 +498,12 @@ Response Server::handleStaticFileRequest(const Request &request) const {
 
 	std::optional<std::string> body = sReadFile(file.get(), static_cast<size_t>(targetStatus.st_size));
 	if (!body) {
-		LOG_ERROR("Failed to read file: {}", target.string());
+		logError("Failed to read file: {}", *target);
 		return Response::error(500);
 	}
 
 	Response response;
-	response.headers.emplace("Content-Type", std::string(sMimeTypeFor(target)));
+	response.headers.emplace("Content-Type", std::string(sMimeTypeFor(*target)));
 	response.body = std::move(*body);
 	return response;
 }

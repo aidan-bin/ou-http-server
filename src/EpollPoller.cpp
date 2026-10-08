@@ -5,9 +5,12 @@
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <cstdint>
 #include <span>
 
 #include <sys/epoll.h>
+#include <sys/eventfd.h>
+#include <unistd.h>
 
 namespace ou {
 
@@ -30,6 +33,17 @@ bool Poller::modify(int fd, Interest interest) { return sControl(queue_.get(), E
 
 bool Poller::remove(int fd) { return epoll_ctl(queue_.get(), EPOLL_CTL_DEL, fd, nullptr) == 0; }
 
+bool Poller::enableWake() {
+	wakeFd_ = UniqueFd(eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC));
+	return wakeFd_.valid() && sControl(queue_.get(), EPOLL_CTL_ADD, wakeFd_.get(), Interest::Read);
+}
+
+void Poller::wake() {
+	const uint64_t one = 1;
+	while (::write(wakeFd_.get(), &one, sizeof(one)) < 0 && errno == EINTR) {
+	}
+}
+
 std::span<const ReadyEvent> Poller::wait(std::chrono::milliseconds timeout) {
 	std::array<epoll_event, kMaxEvents> events{};
 
@@ -43,6 +57,13 @@ std::span<const ReadyEvent> Poller::wait(std::chrono::milliseconds timeout) {
 	ready_.clear();
 
 	for (const epoll_event &event : std::span(events).first(static_cast<size_t>(std::max(count, 0)))) {
+		if (event.data.fd == wakeFd_.get()) {
+			uint64_t wakes = 0;
+			[[maybe_unused]] const ssize_t drained = ::read(wakeFd_.get(), &wakes, sizeof(wakes)); // GCC ignores a (void) cast here
+			ready_.push_back({ .woken = true });
+			continue;
+		}
+
 		// Hangup or error is reported as readable: the read that follows reports Closed (one teardown path)
 		ready_.push_back({ .fd = event.data.fd,
 											 .readable = (event.events & (EPOLLIN | EPOLLHUP | EPOLLERR)) != 0,

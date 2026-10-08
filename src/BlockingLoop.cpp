@@ -46,7 +46,7 @@ UniqueFd BlockingLoop::acceptOne(sockaddr_in &clientAddr) const {
 	if (!clientSocket) {
 		// Back off on real errors so a persistent one can't spin this thread
 		if (!sIsBenignAcceptError(errno)) {
-			LOG_WARN("Failed to accept connection: errno {}", errno);
+			logWarn("Failed to accept connection: errno {}", errno);
 			std::this_thread::sleep_for(kAcceptRetryDelay);
 		}
 		return {};
@@ -57,8 +57,8 @@ UniqueFd BlockingLoop::acceptOne(sockaddr_in &clientAddr) const {
 	return clientSocket;
 }
 
-void BlockingLoop::run(const std::atomic<bool> &running) {
-	while (running.load()) {
+void BlockingLoop::run(const std::stop_token &stop) {
+	while (!stop.stop_requested()) {
 		sockaddr_in clientAddr{};
 
 		const UniqueFd clientSocket = acceptOne(clientAddr);
@@ -66,18 +66,18 @@ void BlockingLoop::run(const std::atomic<bool> &running) {
 			continue;
 
 		try {
-			handleConnection(clientSocket.get(), clientAddr, running);
+			handleConnection(clientSocket.get(), clientAddr, stop);
 		} catch (const std::exception &e) {
-			LOG_ERROR("Unhandled exception while serving client: {}", e.what());
+			logError("Unhandled exception while serving client: {}", e.what());
 		} catch (...) {
-			LOG_ERROR("Unhandled exception of unknown type while serving client");
+			logError("Unhandled exception of unknown type while serving client");
 		}
 
 		socketHandler_.discardSession(clientSocket.get()); // UniqueFd closes the fd
 	}
 }
 
-void BlockingLoop::handleConnection(int clientSocket, const sockaddr_in &clientAddr, const std::atomic<bool> &running) const {
+void BlockingLoop::handleConnection(int clientSocket, const sockaddr_in &clientAddr, const std::stop_token &stop) const {
 	// Bounds every blocking read and write (a stalled peer releases this thread after idleTimeout)
 	const timeval timeout{ .tv_sec = static_cast<time_t>(config_.idleTimeout.count()), .tv_usec = 0 };
 	(void)setsockopt(clientSocket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
@@ -88,18 +88,21 @@ void BlockingLoop::handleConnection(int clientSocket, const sockaddr_in &clientA
 
 	RequestReader reader(config_.maxRequestBytes);
 
-	while (running.load()) {
+	while (!stop.stop_requested()) {
 		Response response;
 		switch (readRequest(clientSocket, reader)) {
-		case RequestReader::Status::NeedMore:
+			using enum RequestReader::Status;
+		case NeedMore:
 			// The peer went away with nothing to answer
 			return;
-		case RequestReader::Status::Rejected:
+		case Rejected:
 			response = reject_(reader.rejectStatus(), clientAddr);
 			break;
-		case RequestReader::Status::Complete:
-			response = dispatch_(reader.take(), clientAddr);
+		case Complete: {
+			Request request = reader.take();
+			response = dispatch_(request, clientAddr).result();
 			break;
+		}
 		}
 
 		if (socketHandler_.writeAll(clientSocket, response.serialize()).status != IoStatus::Ok)
