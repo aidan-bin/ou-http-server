@@ -1,5 +1,7 @@
 # ou HTTP Server
 
+[![CI](https://github.com/aidan-bin/ou-http-server/actions/workflows/ci.yml/badge.svg)](https://github.com/aidan-bin/ou-http-server/actions/workflows/ci.yml)
+
 An HTTP server implemented in C++ using modern STL features.
 
 Unit tests (using Boost.Test) are included, along with a sample driver program.

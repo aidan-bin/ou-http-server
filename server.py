@@ -31,6 +31,14 @@ def run_main(args):
 	require(exe, "Executable")
 	run_command([exe] + (["--eventloop"] if args.eventloop else []))
 
+def test(args):
+	if not args.sanitize:
+		return run_in_build(["ctest", "--verbose"])
+	build_dir = os.path.join(BUILD_DIR, f"sanitize-{args.sanitize.replace(',', '-')}-{platform.system().lower()}")
+	run_command(["cmake", "-S", ".", "-B", build_dir, "-DCMAKE_BUILD_TYPE=Debug", f"-DSANITIZE={args.sanitize}"])
+	run_command(["cmake", "--build", build_dir, "-j", str(os.cpu_count())])
+	run_command(["ctest", "--output-on-failure"], cwd=build_dir)
+
 def run_in_build(cmd):
 	require(BUILD_DIR, "Build directory")
 	run_command(cmd, cwd=BUILD_DIR)
@@ -157,7 +165,9 @@ def main():
 	run_parser.add_argument("--eventloop", action="store_true", help="Serve with the epoll/kqueue event loop instead of thread-per-core")
 	run_parser.set_defaults(func=run_main)
 
-	subparsers.add_parser("test", help="Run the unit tests locally").set_defaults(func=lambda _: run_in_build(["ctest", "--verbose"]))
+	test_parser = subparsers.add_parser("test", help="Run the unit tests locally")
+	test_parser.add_argument("--sanitize", metavar="LIST", help="Build and test with sanitizers, e.g. address,undefined or thread")
+	test_parser.set_defaults(func=test)
 	subparsers.add_parser("tidy", help="Run clang-tidy over src/ and tests/ (requires a prior build)").set_defaults(
 		func=lambda _: run_in_build(["cmake", "--build", ".", "--target", "tidy"]))
 

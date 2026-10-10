@@ -13,6 +13,12 @@ option(DISABLE_HTTPS "Disable HTTPS support" OFF)
 
 add_compile_options(-Wall -Wextra -Werror)
 
+set(SANITIZE "" CACHE STRING "Sanitizers to build with, e.g. address,undefined or thread")
+if (SANITIZE)
+	add_compile_options(-fsanitize=${SANITIZE} -fno-sanitize-recover=all -fno-omit-frame-pointer)
+	add_link_options(-fsanitize=${SANITIZE})
+endif()
+
 if (CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
 	add_compile_options(-fexperimental-library)
 	add_link_options(-fexperimental-library)
