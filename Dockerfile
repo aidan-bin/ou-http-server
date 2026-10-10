@@ -5,6 +5,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y \
 	build-essential \
 	cmake \
+	ninja-build \
 	cppcheck \
 	libboost-test-dev \
 	python3 \
@@ -22,9 +23,5 @@ ENV PATH="/opt/FlameGraph:${PATH}"
 RUN ln -sf "$(ls -d /usr/lib/linux-tools/*/perf | head -1)" /usr/local/bin/perf
 
 WORKDIR /app
-
-COPY . .
-
-RUN mkdir build && cd build && cmake .. && make
 
 CMD ["/bin/bash"]

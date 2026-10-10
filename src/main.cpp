@@ -48,7 +48,7 @@ int runServer(const auto &hasFlag, const auto &numberFlag) {
 	config.port = 8080;
 	config.threadCount = 4;
 	config.enableDirectoryIndexing = true;
-	config.model = hasFlag("--eventloop") ? Server::Model::EventLoop : Server::Model::ThreadPerCore;
+	config.model = hasFlag("--thread-per-core") ? Server::Model::ThreadPerCore : Server::Model::EventLoop;
 	config.preloadBytes = hasFlag("--no-preload") ? 0 : size_t{ 64 } * 1024 * 1024;
 	config.skipSymlinkCheck = hasFlag("--skip-symlink-check");
 	config.logRequests = !hasFlag("--no-request-log");

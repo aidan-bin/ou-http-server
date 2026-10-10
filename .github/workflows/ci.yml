@@ -10,31 +10,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        https: [on, off]
+        preset: [default, no-https, asan, tsan]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y libboost-test-dev libssl-dev
-      - run: ./server.py build ${{ matrix.https == 'off' && '--disable-https' || '' }}
-      - run: ./server.py test
-
-  sanitize:
-    strategy:
-      fail-fast: false
-      matrix:
-        sanitize: ["address,undefined", thread]
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y libboost-test-dev libssl-dev
-      - run: ./server.py test --sanitize ${{ matrix.sanitize }}
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build libboost-test-dev libssl-dev
+      - run: cmake --workflow --preset ${{ matrix.preset }}
 
   lint:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y libboost-test-dev libssl-dev clang-format-19 clang-tidy-19
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build libboost-test-dev libssl-dev clang-format-19 clang-tidy-19
       - run: clang-format-19 --dry-run -Werror src/*.h src/*.cpp tests/test_http.cpp
       - run: |
-          cmake -S . -B build -DCLANG_TIDY_EXECUTABLE=$(which clang-tidy-19)
-          ./server.py tidy
+          cmake --preset default -DCLANG_TIDY_EXECUTABLE=$(which clang-tidy-19)
+          cmake --build --preset tidy

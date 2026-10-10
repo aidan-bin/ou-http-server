@@ -106,7 +106,7 @@ Request sMakeRequest(const std::string &path, Method method = Method::GET) {
 	return request;
 }
 
-Server::Config sConfig(const std::filesystem::path &root, Server::Model model = Server::Model::ThreadPerCore) {
+Server::Config sConfig(const std::filesystem::path &root, Server::Model model = Server::Config{}.model) {
 	Server::Config config;
 	config.servingDirectory = root;
 	config.port = 0; // Kernel picks

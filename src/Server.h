@@ -57,7 +57,7 @@ public:
 		uint16_t port = 8080;
 		unsigned threadCount = 4;
 		bool enableDirectoryIndexing = false;
-		Model model = Model::ThreadPerCore;
+		Model model = Model::EventLoop;
 
 		// Requests over this limit are rejected with 413
 		size_t maxRequestBytes = size_t{ 1024 } * 1024;
