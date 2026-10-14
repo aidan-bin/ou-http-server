@@ -61,6 +61,13 @@ cmake --workflow --preset asan       # Debug + address,undefined (also ubsan, ts
 cmake --build --preset tidy          # clang-tidy over src/ and tests/
 ```
 
+`fuzz/` holds a libFuzzer target that checks a property, not just crashes: a request parses the same whatever the read sizes. It needs LLVM clang, so build it in Docker:
+
+```
+docker compose run --rm -e CXX=clang++-19 server cmake --workflow --preset fuzz   # replays the seed corpus
+docker compose run --rm server build/fuzz-Linux/fuzz/fuzz_request_reader -max_len=1025 -dict=fuzz/http.dict <scratch-dir> fuzz/corpus/request_reader
+```
+
 The Docker image runs Linux (epoll) without OpenSSL, so it serves plain HTTP. It mounts the project directory and builds into `build/<preset>-Linux/`:
 
 ```

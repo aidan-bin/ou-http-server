@@ -19,6 +19,11 @@ if (SANITIZE)
 	add_link_options(-fsanitize=${SANITIZE})
 endif()
 
+option(FUZZ "Build the libFuzzer targets in fuzz/" OFF)
+if (FUZZ)
+	add_compile_options(-fsanitize=fuzzer-no-link)
+endif()
+
 if (CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
 	add_compile_options(-fexperimental-library)
 	add_link_options(-fexperimental-library)
@@ -69,3 +74,6 @@ endif()
 
 enable_testing()
 add_subdirectory(tests)
+if (FUZZ)
+	add_subdirectory(fuzz)
+endif()

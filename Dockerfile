@@ -5,6 +5,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y \
 	build-essential \
 	cmake \
+	clang-19 \
+	libclang-rt-19-dev \
 	ninja-build \
 	cppcheck \
 	libboost-test-dev \

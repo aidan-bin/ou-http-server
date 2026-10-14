@@ -26,3 +26,9 @@ Makefile
 *.log
 
 certs/*
+
+crash-*
+leak-*
+timeout-*
+oom-*
+slow-unit-*

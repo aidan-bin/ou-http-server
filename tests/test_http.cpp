@@ -8,6 +8,7 @@
 #include "KVStore.h"
 #include "Logging.h"
 #include "Poller.h"
+#include "ReadStream.h"
 #include "RequestReader.h"
 #include "Server.h"
 #include "UniqueFd.h"
@@ -228,6 +229,11 @@ BOOST_AUTO_TEST_CASE(test_percent_encoding) {
 	BOOST_CHECK_EQUAL(percentEncode("aZ0-_.~/"), "aZ0-_.~/");
 
 	BOOST_CHECK_EQUAL(percentDecode(percentEncode("/a b+c#d.txt")), "/a b+c#d.txt");
+
+	std::string allBytes;
+	for (int byte = 0; byte < 256; ++byte)
+		allBytes += static_cast<char>(byte);
+	BOOST_CHECK(percentDecode(percentEncode(allBytes)) == allBytes);
 }
 
 BOOST_AUTO_TEST_CASE(test_keep_alive_defaults_by_version) {
@@ -253,33 +259,6 @@ BOOST_AUTO_TEST_CASE(test_response_serialization) {
 
 // --- RequestReader ---
 
-namespace {
-
-std::vector<std::string> sReadStream(std::string_view stream, size_t chunkSize) {
-	RequestReader reader(1024);
-	std::vector<std::string> events;
-
-	auto drain = [&](RequestReader::Status status) {
-		while (status == RequestReader::Status::Complete) {
-			const Request request = reader.take();
-			events.push_back(std::format("{} {} {}", request.method, request.path, request.body));
-			status = reader.reset();
-		}
-		if (status == RequestReader::Status::Rejected)
-			events.push_back(std::format("reject {}", reader.rejectStatus()));
-		return status != RequestReader::Status::Rejected;
-	};
-
-	for (size_t offset = 0; offset < stream.size(); offset += chunkSize) {
-		if (!drain(reader.consume(stream.substr(offset, chunkSize))))
-			return events;
-	}
-	drain(reader.abandon());
-	return events;
-}
-
-} // namespace
-
 BOOST_AUTO_TEST_CASE(test_request_reader_ignores_read_boundaries) {
 	const std::vector<std::pair<std::string_view, std::vector<std::string>>> cases{
 		{ "POST /a HTTP/1.1\r\nContent-Length: 5\r\n\r\nHELLOGET /b HTTP/1.1\r\n\r\n", { "POST /a HELLO", "GET /b " } },
@@ -295,7 +274,7 @@ BOOST_AUTO_TEST_CASE(test_request_reader_ignores_read_boundaries) {
 	for (const auto &[stream, expected] : cases) {
 		for (size_t chunkSize = 1; chunkSize <= stream.size(); ++chunkSize) {
 			BOOST_TEST_CONTEXT("stream " << stream << ", chunk " << chunkSize) {
-				BOOST_TEST(sReadStream(stream, chunkSize) == expected, boost::test_tools::per_element());
+				BOOST_TEST(readStream(stream, chunkSize) == expected, boost::test_tools::per_element());
 			}
 		}
 	}
