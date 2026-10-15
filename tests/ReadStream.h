@@ -21,7 +21,8 @@ inline std::vector<std::string> readStream(std::string_view stream, size_t chunk
 	auto drain = [&](RequestReader::Status status) {
 		while (status == RequestReader::Status::Complete) {
 			const Request request = reader.take();
-			events.push_back(std::format("{} {} {}", request.method, request.path, request.body));
+			events.push_back(
+					std::format("{} {} {} {} {}", request.method, request.path, request.query, request.header("Host").value_or(""), request.body));
 			status = reader.reset();
 		}
 		if (status == RequestReader::Status::Rejected)

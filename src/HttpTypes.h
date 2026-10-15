@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <netinet/in.h>
 
@@ -116,16 +117,17 @@ using Headers = std::map<std::string, std::string, CaseInsensitiveLess>;
 struct Request {
 	Method method{ Method::GET };
 	bool http10 = false;
-	std::string path;	 // Decoded
-	std::string query; // Raw, must be percent-decoded
-	Headers headers;
-	std::string body;
+	std::string path;				// Decoded
+	std::string_view query; // Raw, must be percent-decoded
+	std::vector<std::pair<std::string_view, std::string_view>> headers;
+	std::string_view body;
 
 	std::optional<sockaddr_in> clientAddr;
 
-	// Fails with the status to reject with (505 for a well-formed but unsupported version, else 400)
-	[[nodiscard]] static std::expected<Request, int> parse(std::string_view raw);
+	// Parses the head without the blank line; fails with 505 for an unsupported version, else 400
+	[[nodiscard]] static std::expected<Request, int> parse(std::string_view head);
 
+	// Case-insensitive; the last duplicate wins
 	[[nodiscard]] std::optional<std::string_view> header(std::string_view name) const;
 	[[nodiscard]] std::optional<size_t> contentLength() const;
 

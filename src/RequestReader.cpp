@@ -18,7 +18,13 @@ RequestReader::Status RequestReader::reject(int status) noexcept {
 }
 
 RequestReader::Status RequestReader::consume(std::string_view bytes) {
+	const size_t capacity = raw_.capacity();
 	raw_.append(bytes);
+
+	// Re-point the request's views if the append reallocated
+	if (request_ && raw_.capacity() != capacity)
+		request_ = *parseHead();
+
 	return parseBuffered();
 }
 
@@ -27,6 +33,7 @@ RequestReader::Status RequestReader::abandon() noexcept { return raw_.empty() ? 
 RequestReader::Status RequestReader::reset() {
 	// Keep any pipelined bytes after the finished request and parse them now
 	raw_.erase(0, std::min(totalSize_, raw_.size()));
+	searched_ = 0;
 	bodyStart_ = std::string::npos;
 	totalSize_ = 0;
 	request_.reset();
@@ -42,14 +49,16 @@ RequestReader::Status RequestReader::parseBuffered() {
 		return reject(413);
 
 	if (bodyStart_ == std::string::npos) {
-		const size_t headerEnd = raw_.find(kHeaderTerminator);
-		if (headerEnd == std::string::npos)
+		const size_t headerEnd = raw_.find(kHeaderTerminator, searched_);
+		if (headerEnd == std::string::npos) {
+			searched_ = raw_.size() - std::min(raw_.size(), kHeaderTerminator.size() - 1);
 			return Status::NeedMore;
+		}
 		bodyStart_ = headerEnd + kHeaderTerminator.size();
 	}
 
 	if (!request_) {
-		std::expected<Request, int> parsed = Request::parse(raw_);
+		std::expected<Request, int> parsed = parseHead();
 		if (!parsed)
 			return reject(parsed.error());
 		request_ = std::move(*parsed);
@@ -70,12 +79,16 @@ RequestReader::Status RequestReader::parseBuffered() {
 	return raw_.size() < totalSize_ ? Status::NeedMore : Status::Complete;
 }
 
+std::expected<Request, int> RequestReader::parseHead() const {
+	return Request::parse(std::string_view(raw_).substr(0, bodyStart_ - kHeaderTerminator.size()));
+}
+
 Request RequestReader::take() {
 	if (!request_)
 		return {};
 
 	// Whatever follows the body (given by Content-Length) stays in raw_ for reset()
-	request_->body.assign(raw_, bodyStart_, totalSize_ - bodyStart_);
+	request_->body = std::string_view(raw_).substr(bodyStart_, totalSize_ - bodyStart_);
 
 	return std::move(*request_);
 }

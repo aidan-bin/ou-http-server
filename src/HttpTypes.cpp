@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <charconv>
 #include <concepts>
+#include <iterator>
 #include <ostream>
 #include <ranges>
 
@@ -142,12 +143,8 @@ std::string_view trim(std::string_view str) {
 	return str.substr(first, str.find_last_not_of(kWhitespace) - first + 1);
 }
 
-std::expected<Request, int> Request::parse(std::string_view raw) {
-	const size_t headerEnd = raw.find("\r\n\r\n");
-	const std::string_view headerSection = raw.substr(0, headerEnd);
-	const std::string_view bodySection = (headerEnd != std::string_view::npos) ? raw.substr(headerEnd + 4) : std::string_view{};
-
-	auto [requestLine, headerLines] = sSplitAt(headerSection, '\n');
+std::expected<Request, int> Request::parse(std::string_view head) {
+	auto [requestLine, headerLines] = sSplitAt(head, '\n');
 	requestLine = trim(requestLine);
 	if (requestLine.empty())
 		return std::unexpected(400);
@@ -173,11 +170,12 @@ std::expected<Request, int> Request::parse(std::string_view raw) {
 	const size_t queryStart = target.find('?');
 	request.path = percentDecode(target.substr(0, queryStart), false);
 	if (queryStart != std::string_view::npos)
-		request.query = std::string(target.substr(queryStart + 1));
+		request.query = target.substr(queryStart + 1);
 
 	if (!request.path.starts_with('/'))
 		return std::unexpected(400);
 
+	request.headers.reserve(std::ranges::count(headerLines, '\n') + 1);
 	while (!headerLines.empty()) {
 		auto [line, remaining] = sSplitAt(headerLines, '\n');
 		headerLines = remaining;
@@ -195,21 +193,20 @@ std::expected<Request, int> Request::parse(std::string_view raw) {
 			return std::unexpected(400);
 
 		const std::string_view value = trim(line.substr(colon + 1));
-		const auto it = request.headers.find(name);
-		if (it != request.headers.end() && equalsIgnoreCase(name, "Content-Length") && it->second != value)
+		if (equalsIgnoreCase(name, "Content-Length") && request.header(name).value_or(value) != value)
 			return std::unexpected(400);
-		request.headers[std::string(name)] = value;
+		request.headers.emplace_back(name, value);
 	}
 
-	request.body = std::string(bodySection);
 	return request;
 }
 
 std::optional<std::string_view> Request::header(std::string_view name) const {
-	const auto it = headers.find(name);
-	if (it == headers.end())
-		return std::nullopt;
-	return it->second;
+	for (const auto &[field, value] : headers | std::views::reverse) {
+		if (equalsIgnoreCase(field, name))
+			return value;
+	}
+	return std::nullopt;
 }
 
 std::optional<size_t> Request::contentLength() const {
@@ -232,8 +229,13 @@ bool Request::wantsKeepAlive() const {
 std::string Response::serialize() const {
 	const std::string_view reason = reasonPhrase.empty() ? defaultReasonPhrase(statusCode) : std::string_view(reasonPhrase);
 
-	std::string serialized = std::format("HTTP/1.1 {} {}\r\nContent-Length: {}\r\nConnection: {}\r\n", statusCode, reason, body.size(),
-																			 keepAlive ? "keep-alive" : "close");
+	constexpr size_t kHeadEstimate = 256;
+	std::string serialized;
+	serialized.reserve(kHeadEstimate + body.size());
+	auto out = std::back_inserter(serialized);
+
+	std::format_to(out, "HTTP/1.1 {} {}\r\nContent-Length: {}\r\nConnection: {}\r\n", statusCode, reason, body.size(),
+								 keepAlive ? "keep-alive" : "close");
 
 	if (!headers.contains("Content-Type"))
 		serialized += "Content-Type: text/html\r\n";
@@ -241,7 +243,7 @@ std::string Response::serialize() const {
 	for (const auto &[name, value] : headers) {
 		if (equalsIgnoreCase(name, "Content-Length") || equalsIgnoreCase(name, "Connection"))
 			continue;
-		serialized += std::format("{}: {}\r\n", name, value);
+		std::format_to(out, "{}: {}\r\n", name, value);
 	}
 
 	serialized += "\r\n";

@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <expected>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -28,7 +29,8 @@ public:
 	// The status code to answer with; only meaningful after Rejected
 	[[nodiscard]] int rejectStatus() const noexcept { return rejectStatus_; }
 
-	// Moves the request out, leaving any bytes after it buffered for reset(); only valid after Complete
+	// Moves the request out; only valid after Complete.
+	// Its views last until the next consume() or reset().
 	[[nodiscard]] Request take();
 
 	// Drops the finished request and reports on whatever followed it
@@ -38,9 +40,11 @@ private:
 	Status reject(int status) noexcept;
 
 	Status parseBuffered();
+	[[nodiscard]] std::expected<Request, int> parseHead() const;
 
 	size_t maxRequestBytes_;
 	std::string raw_;
+	size_t searched_ = 0;
 	size_t bodyStart_ = std::string::npos;
 	size_t totalSize_ = 0;
 	int rejectStatus_ = 400;

@@ -52,7 +52,7 @@ Response KVStore::handle(const Request &request) {
 		return Response::plainText(404, "Key not found");
 	}
 	case PUT:
-		set(key, request.body);
+		set(key, std::string(request.body));
 		return Response::plainText(200, "OK");
 	case DELETE:
 		if (remove(key)) {
