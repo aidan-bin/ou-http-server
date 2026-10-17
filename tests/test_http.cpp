@@ -358,12 +358,10 @@ public:
 
 class TestMiddleware : public Middleware {
 public:
-	bool process(Request &request, Response &response) override {
-		if (request.path == "/middleware") {
-			response = Response::plainText(200, "Intercepted by Middleware");
-			return true;
-		}
-		return false;
+	std::optional<Response> process(Request &request) override {
+		if (request.path == "/middleware")
+			return Response::plainText(200, "Intercepted by Middleware");
+		return std::nullopt;
 	}
 };
 
@@ -630,7 +628,7 @@ BOOST_AUTO_TEST_CASE(test_access_log_middleware) {
 	Request request = sMakeRequest("/logged");
 	Response response = Response::plainText(200, "hello");
 
-	BOOST_CHECK(!accessLog.process(request, response));
+	BOOST_CHECK(!accessLog.process(request));
 	accessLog.postProcess(request, response);
 
 	const std::vector<std::string> lines = sLines(logPath);
@@ -856,6 +854,26 @@ BOOST_DATA_TEST_CASE(test_server_round_trip, bdata::make(kModels), model) {
 	// Must return rather than deadlock, and must tolerate the second call ~Server makes
 	server.stop();
 	server.stop();
+}
+
+BOOST_AUTO_TEST_CASE(test_start_reports_failed_step) {
+	Server first(sConfig("."));
+	BOOST_REQUIRE(first.start());
+
+	Server::Config config = sConfig(".");
+	config.port = first.port();
+	Server second(config);
+	const auto started = second.start();
+	BOOST_REQUIRE(!started);
+	BOOST_CHECK_EQUAL(started.error().step, "bind socket");
+	BOOST_CHECK(started.error().code == std::errc::address_in_use);
+
+	const TempDir root("start");
+	root.write("file.txt", "not a directory");
+	Server notDirectory(sConfig(root.path() / "file.txt"));
+	BOOST_CHECK(notDirectory.start().error().code == std::errc::not_a_directory);
+	Server missing(sConfig(root.path() / "missing"));
+	BOOST_CHECK(missing.start().error().code == std::errc::no_such_file_or_directory);
 }
 
 BOOST_DATA_TEST_CASE(test_keep_alive, bdata::make(kModels), model) {

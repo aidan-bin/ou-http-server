@@ -210,11 +210,7 @@ std::optional<std::string_view> Request::header(std::string_view name) const {
 }
 
 std::optional<size_t> Request::contentLength() const {
-	const std::optional<std::string_view> value = header("Content-Length");
-	if (!value)
-		return std::nullopt;
-
-	return sParseNumber<size_t>(trim(*value));
+	return header("Content-Length").and_then([](std::string_view value) { return sParseNumber<size_t>(trim(value)); });
 }
 
 bool Request::wantsKeepAlive() const {

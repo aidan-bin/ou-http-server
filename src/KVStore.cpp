@@ -44,13 +44,10 @@ Response KVStore::handle(const Request &request) {
 
 	switch (request.method) {
 		using enum Method;
-	case GET: {
-		const std::optional<std::string> value = get(key);
-		if (value) {
-			return Response::plainText(200, *value);
-		}
+	case GET:
+		if (std::optional<std::string> value = get(key))
+			return Response::plainText(200, std::move(*value));
 		return Response::plainText(404, "Key not found");
-	}
 	case PUT:
 		set(key, std::string(request.body));
 		return Response::plainText(200, "OK");

@@ -62,8 +62,8 @@ void AccessLog::flushLocked() {
 
 void AccessLog::postProcess(const Request &request, const Response &response) {
 	// Middleware hook to log every request with its final status
-	if (request.clientAddr.has_value())
-		log(request, response, request.clientAddr.value());
+	if (request.clientAddr)
+		log(request, response, *request.clientAddr);
 }
 
 } // namespace ou::http

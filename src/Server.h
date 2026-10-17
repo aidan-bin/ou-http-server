@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <expected>
 #include <filesystem>
+#include <format>
 #include <functional>
 #include <initializer_list>
 #include <map>
@@ -22,6 +23,7 @@
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <thread>
 #include <unordered_map>
 #include <utility>
@@ -38,8 +40,8 @@ public:
 	Middleware &operator=(Middleware &&) = delete;
 	virtual ~Middleware() = default;
 
-	// Runs before routing. Return true to answer with `response` and skip routing; may modify `request`
-	virtual bool process(Request & /*request*/, Response & /*response*/) { return false; }
+	// Runs before routing. Return a response to answer with it and skip routing; may modify `request`
+	virtual std::optional<Response> process(Request & /*request*/) { return std::nullopt; }
 
 	// Runs after every request (including short-circuited and rejected ones)
 	virtual void postProcess(const Request & /*request*/, const Response & /*response*/) {}
@@ -85,6 +87,15 @@ public:
 #endif
 	};
 
+	struct StartError {
+		std::string step;
+		std::error_code code; // Empty when the step has no errno; its reason is then part of step
+
+		[[nodiscard]] std::string message() const {
+			return code ? std::format("Failed to {}: {}", step, code.message()) : std::format("Failed to {}", step);
+		}
+	};
+
 	explicit Server(Config config);
 	Server(const Server &) = delete;
 	Server &operator=(const Server &) = delete;
@@ -92,7 +103,7 @@ public:
 	Server &operator=(Server &&) = delete;
 	~Server();
 
-	[[nodiscard]] bool start();
+	[[nodiscard]] std::expected<void, StartError> start();
 	void stop();
 
 	// The bound port; valid after start()

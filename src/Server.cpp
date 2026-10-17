@@ -1,6 +1,7 @@
 #include "Server.h"
 #include "BlockingLoop.h"
 #include "EventLoop.h"
+#include "Listener.h"
 #include "Logging.h"
 
 #include <algorithm>
@@ -164,6 +165,8 @@ std::string sGenerateDirectoryIndex(const std::string &requestPath, const std::f
 	return html;
 }
 
+ou::http::Server::StartError sStartError(const ou::SocketError &error) { return { .step = std::string(error.step), .code = error.code }; }
+
 } // namespace
 
 namespace ou::http {
@@ -171,13 +174,7 @@ namespace ou::http {
 Server::Server(Config config) : config_(std::move(config)), staticFiles_(std::bind_front(&Server::handleStaticFileRequest, this)) {
 	std::error_code ec;
 	servingRoot_ = std::filesystem::weakly_canonical(config_.servingDirectory, ec);
-	if (ec) {
-		logError("Cannot resolve serving directory: {}", config_.servingDirectory.string());
-		servingRoot_.clear();
-		return;
-	}
-
-	if (config_.preloadBytes > 0)
+	if (!ec && config_.preloadBytes > 0)
 		preload();
 }
 
@@ -218,8 +215,14 @@ void Server::preload() {
 
 Server::~Server() { stop(); }
 
-bool Server::start() {
+std::expected<void, Server::StartError> Server::start() {
 	logInfo("Starting server with {} threads...", config_.threadCount);
+
+	std::error_code ec;
+	if (!std::filesystem::is_directory(servingRoot_, ec)) {
+		return std::unexpected(StartError{ .step = std::format("open serving directory {}", config_.servingDirectory.string()),
+																			 .code = ec ? ec : std::make_error_code(std::errc::not_a_directory) });
+	}
 
 	try {
 #ifndef DISABLE_HTTPS
@@ -231,54 +234,16 @@ bool Server::start() {
 			socketHandler_ = std::make_unique<PlainSocketHandler>();
 		}
 	} catch (const std::exception &e) {
-		logError("Failed to initialize socket handler: {}", e.what());
-		return false;
+		return std::unexpected(StartError{ .step = std::format("initialize socket handler: {}", e.what()), .code = {} });
 	}
 
-	UniqueFd serverSocket(socket(AF_INET, SOCK_STREAM, 0));
-	if (!serverSocket) {
-		logError("Failed to create socket");
-		return false;
-	}
+	std::expected<ou::Listener, StartError> listener = ou::openListener(config_.port).transform_error(sStartError);
+	if (!listener)
+		return std::unexpected(std::move(listener).error());
 
-	// Lets a restarted server rebind while the old socket's connections sit in TIME_WAIT
-	const int enable = 1;
-	if (setsockopt(serverSocket.get(), SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(enable)) < 0) {
-		logError("Failed to set SO_REUSEADDR");
-		return false;
-	}
-
-	sockaddr_in addr{};
-	addr.sin_family = AF_INET;
-	addr.sin_addr.s_addr = INADDR_ANY;
-	addr.sin_port = htons(config_.port);
-
-	if (bind(serverSocket.get(), reinterpret_cast<struct sockaddr *>(&addr), sizeof(addr)) < 0) {
-		logError("Failed to bind socket");
-		return false;
-	}
-
-	if (listen(serverSocket.get(), SOMAXCONN) < 0) {
-		logError("Failed to listen on socket");
-		return false;
-	}
-
-	// Non-blocking so the accept loop can poll and notice stop() without being closed out from under it
-	if (!setNonBlocking(serverSocket.get(), true)) {
-		logError("Failed to set socket non-blocking");
-		return false;
-	}
-
-	sockaddr_in bound{};
-	socklen_t boundLength = sizeof(bound);
-	if (getsockname(serverSocket.get(), reinterpret_cast<struct sockaddr *>(&bound), &boundLength) < 0) {
-		logError("Failed to read the bound port");
-		return false;
-	}
-	port_ = ntohs(bound.sin_port);
-
-	logInfo("Server socket {} bound and listening on port {}...", serverSocket.get(), port_);
-	listenSocket_ = std::move(serverSocket);
+	port_ = listener->port;
+	listenSocket_ = std::move(listener->socket);
+	logInfo("Server socket {} bound and listening on port {}...", listenSocket_.get(), port_);
 
 	if (config_.model == Model::EventLoop && config_.handlerThreads > 0)
 		pool_.emplace(config_.handlerThreads);
@@ -286,7 +251,7 @@ bool Server::start() {
 	for (unsigned i = 0; i < config_.threadCount; ++i) {
 		threads_.emplace_back([this](const std::stop_token &stop) { runLoop(stop); });
 	}
-	return true;
+	return {};
 }
 
 void Server::stop() {
@@ -350,10 +315,9 @@ void Server::runLoop(const std::stop_token &stop) {
 }
 
 Task<Response> Server::handle(Request &request) const {
-	Response response;
 	for (const auto &middleware : middlewares_) {
-		if (middleware->process(request, response))
-			return response;
+		if (std::optional<Response> response = middleware->process(request))
+			return std::move(*response);
 	}
 
 	return handlerFor(request)(request);

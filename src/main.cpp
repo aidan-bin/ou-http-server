@@ -1,4 +1,4 @@
-// Demo driver: serves ./example/www with an access log, a /kv store, and /sleep?ms= and /work?ms= handlers
+// Demo driver
 
 #include "AccessLog.h"
 #include "Awaitables.h"
@@ -25,6 +25,16 @@ namespace {
 std::atomic<bool> g_running{ true };
 
 void sSignalHandler(int /*signum*/) { g_running.store(false); }
+
+// Short-circuits writes before routing, e.g., PUT /kv
+class ReadOnly final : public ou::http::Middleware {
+public:
+	std::optional<ou::http::Response> process(ou::http::Request &request) final {
+		if (request.method == ou::http::Method::GET || request.method == ou::http::Method::HEAD)
+			return std::nullopt;
+		return ou::http::Response::plainText(405, "Server is read-only");
+	}
+};
 
 std::optional<std::chrono::milliseconds> sMillisParam(const ou::http::Request &request) {
 	const auto params = ou::http::parseQuery(request.query);
@@ -64,6 +74,9 @@ int runServer(const auto &hasFlag, const auto &numberFlag) {
 		server.addMiddleware(std::make_shared<AccessLog>(accessLogConfig));
 	}
 
+	if (hasFlag("--read-only"))
+		server.addMiddleware(std::make_shared<ReadOnly>());
+
 	const auto kvStore = std::make_shared<KVStore>();
 	server.registerPathHandler({ Method::GET, Method::PUT, Method::DELETE }, "/kv",
 														 [kvStore](const Request &request) { return kvStore->handle(request); });
@@ -89,8 +102,8 @@ int runServer(const auto &hasFlag, const auto &numberFlag) {
 		});
 	});
 
-	if (!server.start()) {
-		ou::logError("Server failed to start");
+	if (const auto started = server.start(); !started) {
+		ou::logError("Server failed to start: {}", started.error().message());
 		return EXIT_FAILURE;
 	}
 
