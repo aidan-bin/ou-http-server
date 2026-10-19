@@ -35,6 +35,11 @@
 			"name": "bench",
 			"inherits": "default",
 			"cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo", "DISABLE_HTTPS": "ON" }
+		},
+		{
+			"name": "coverage",
+			"inherits": "default",
+			"cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "COVERAGE": "ON" }
 		}
 	],
 	"buildPresets": [
@@ -45,15 +50,22 @@
 		{ "name": "tsan", "configurePreset": "tsan" },
 		{ "name": "fuzz", "configurePreset": "fuzz" },
 		{ "name": "bench", "configurePreset": "bench", "targets": ["ou_http_server"] },
+		{ "name": "coverage", "configurePreset": "coverage" },
 		{ "name": "tidy", "configurePreset": "default", "targets": ["tidy"] }
 	],
 	"testPresets": [
-		{ "name": "default", "configurePreset": "default", "output": { "outputOnFailure": true } },
+		{ "name": "default", "configurePreset": "default", "output": { "outputOnFailure": true }, "execution": { "jobs": 4 } },
 		{ "name": "no-https", "inherits": "default", "configurePreset": "no-https" },
 		{ "name": "asan", "inherits": "default", "configurePreset": "asan" },
 		{ "name": "ubsan", "inherits": "default", "configurePreset": "ubsan" },
 		{ "name": "tsan", "inherits": "default", "configurePreset": "tsan" },
-		{ "name": "fuzz", "inherits": "default", "configurePreset": "fuzz" }
+		{ "name": "fuzz", "inherits": "default", "configurePreset": "fuzz" },
+		{
+			"name": "coverage",
+			"inherits": "default",
+			"configurePreset": "coverage",
+			"environment": { "LLVM_PROFILE_FILE": "${sourceDir}/build/coverage-${hostSystemName}/profiles/%p.profraw" }
+		}
 	],
 	"workflowPresets": [
 		{
@@ -102,6 +114,14 @@
 				{ "type": "configure", "name": "fuzz" },
 				{ "type": "build", "name": "fuzz" },
 				{ "type": "test", "name": "fuzz" }
+			]
+		},
+		{
+			"name": "coverage",
+			"steps": [
+				{ "type": "configure", "name": "coverage" },
+				{ "type": "build", "name": "coverage" },
+				{ "type": "test", "name": "coverage" }
 			]
 		}
 	]
