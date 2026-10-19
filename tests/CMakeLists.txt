@@ -7,12 +7,9 @@ find_package(Boost REQUIRED)
 
 file(GLOB TEST_SUITE_SOURCES RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} CONFIGURE_DEPENDS test_*.cpp)
 list(REMOVE_ITEM TEST_SUITE_SOURCES test_main.cpp)
-if (DISABLE_HTTPS)
-	list(REMOVE_ITEM TEST_SUITE_SOURCES test_tls.cpp)
-endif()
 
 add_executable(test_http test_main.cpp ${TEST_SUITE_SOURCES})
-target_link_libraries(test_http PRIVATE http_lib ${SSL_LIBS} Boost::headers pthread)
+target_link_libraries(test_http PRIVATE http_lib Boost::headers pthread)
 
 target_compile_definitions(test_http PRIVATE TEST_CERT_DIR="${CMAKE_SOURCE_DIR}/example/certs")
 

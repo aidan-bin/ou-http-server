@@ -7,11 +7,6 @@
 			"binaryDir": "${sourceDir}/build/${presetName}-${hostSystemName}"
 		},
 		{
-			"name": "no-https",
-			"inherits": "default",
-			"cacheVariables": { "DISABLE_HTTPS": "ON" }
-		},
-		{
 			"name": "asan",
 			"inherits": "default",
 			"cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "SANITIZE": "address,undefined" }
@@ -34,7 +29,7 @@
 		{
 			"name": "bench",
 			"inherits": "default",
-			"cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo", "DISABLE_HTTPS": "ON" }
+			"cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" }
 		},
 		{
 			"name": "coverage",
@@ -44,7 +39,6 @@
 	],
 	"buildPresets": [
 		{ "name": "default", "configurePreset": "default" },
-		{ "name": "no-https", "configurePreset": "no-https" },
 		{ "name": "asan", "configurePreset": "asan" },
 		{ "name": "ubsan", "configurePreset": "ubsan" },
 		{ "name": "tsan", "configurePreset": "tsan" },
@@ -55,7 +49,6 @@
 	],
 	"testPresets": [
 		{ "name": "default", "configurePreset": "default", "output": { "outputOnFailure": true }, "execution": { "jobs": 4 } },
-		{ "name": "no-https", "inherits": "default", "configurePreset": "no-https" },
 		{ "name": "asan", "inherits": "default", "configurePreset": "asan" },
 		{ "name": "ubsan", "inherits": "default", "configurePreset": "ubsan" },
 		{ "name": "tsan", "inherits": "default", "configurePreset": "tsan" },
@@ -74,14 +67,6 @@
 				{ "type": "configure", "name": "default" },
 				{ "type": "build", "name": "default" },
 				{ "type": "test", "name": "default" }
-			]
-		},
-		{
-			"name": "no-https",
-			"steps": [
-				{ "type": "configure", "name": "no-https" },
-				{ "type": "build", "name": "no-https" },
-				{ "type": "test", "name": "no-https" }
 			]
 		},
 		{

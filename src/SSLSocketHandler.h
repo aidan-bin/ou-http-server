@@ -1,7 +1,5 @@
 #pragma once
 
-#ifndef DISABLE_HTTPS
-
 #include "SocketHandler.h"
 
 #include <filesystem>
@@ -37,5 +35,3 @@ private:
 };
 
 } // namespace ou
-
-#endif // DISABLE_HTTPS

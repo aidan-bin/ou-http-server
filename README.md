@@ -1,8 +1,8 @@
-# ou HTTP(S) Server
+# ou HTTP Server
 
 [![CI](https://github.com/aidan-bin/ou-http-server/actions/workflows/ci.yml/badge.svg)](https://github.com/aidan-bin/ou-http-server/actions/workflows/ci.yml)
 
-An HTTP(S) server in C++23 with two concurrency models, thread-per-core and an event loop (epoll on Linux, kqueue on macOS), and handlers that can be coroutines. Includes Boost.Test unit tests, a demo driver, and a Docker setup.
+An HTTP server in C++23 with TLS (OpenSSL), two concurrency models, thread-per-core and an event loop (epoll on Linux, kqueue on macOS), and handlers that can be coroutines. Includes Boost.Test unit tests, a demo driver, and a Docker setup.
 
 ## Quickstart
 
@@ -35,7 +35,8 @@ openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 365 -node
 - Apple clang 16+ or GCC 13+
 - CMake 3.25+ and Ninja
 - Boost.Test
-- Optional: OpenSSL (HTTPS), clang-format and clang-tidy, Docker with Compose
+- OpenSSL
+- Optional: clang-format and clang-tidy, Docker with Compose
 
 macOS (Homebrew):
 
@@ -57,7 +58,6 @@ Every build is a CMake preset and lands in `build/<preset>-<os>/`:
 
 ```
 cmake --workflow --preset default    # configure, build, test
-cmake --workflow --preset no-https   # same without OpenSSL
 cmake --workflow --preset asan       # Debug + address,undefined (also ubsan, tsan)
 cmake --build --preset tidy          # clang-tidy over src/ and tests/
 ```
@@ -69,7 +69,7 @@ docker compose run --rm -e CXX=clang++-19 server cmake --workflow --preset fuzz 
 docker compose run --rm server build/fuzz-Linux/fuzz/fuzz_request_reader -max_len=1025 -dict=fuzz/http.dict <scratch-dir> fuzz/corpus/request_reader
 ```
 
-The Docker image runs Linux (epoll) without OpenSSL, so it serves plain HTTP. It mounts the project directory and builds into `build/<preset>-Linux/`:
+The Docker image runs Linux (epoll). It mounts the project directory and builds into `build/<preset>-Linux/`:
 
 ```
 docker compose run --rm server cmake --workflow --preset asan

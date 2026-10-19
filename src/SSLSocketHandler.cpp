@@ -1,7 +1,5 @@
 #include "SSLSocketHandler.h"
 
-#ifndef DISABLE_HTTPS
-
 #include <algorithm>
 #include <array>
 #include <format>
@@ -123,5 +121,3 @@ void SSLSocketHandler::discardSession(int clientSocket) {
 }
 
 } // namespace ou
-
-#endif // DISABLE_HTTPS

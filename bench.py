@@ -99,7 +99,7 @@ def bench(args):
 	with tempfile.TemporaryDirectory(prefix="ou-bench-") as workdir:
 		shutil.copytree("example/www", os.path.join(workdir, "example/www"))
 
-		flags = ["--no-access-log", "--no-request-log"] + (["--no-preload"] if args.disk else []) + (["--skip-symlink-check"] if args.skip_symlink_check else [])
+		flags = ["--no-tls", "--no-access-log", "--no-request-log"] + (["--no-preload"] if args.disk else []) + (["--skip-symlink-check"] if args.skip_symlink_check else [])
 		servers = {"thread-per-core": [exe, "--thread-per-core", *flags], "event-loop": [exe, *flags]}
 		if args.handler_threads:
 			servers["event-loop+pool"] = [exe, f"--handler-threads={args.handler_threads}", *flags]

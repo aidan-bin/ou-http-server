@@ -96,9 +96,7 @@ public:
 		// One console line per routed request
 		bool logRequests = true;
 
-#ifndef DISABLE_HTTPS
 		SSLSocketHandler::Config https;
-#endif
 	};
 
 	struct StartError {

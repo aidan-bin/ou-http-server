@@ -9,8 +9,6 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 file(GLOB HTTP_LIB_SOURCES ${CMAKE_SOURCE_DIR}/src/*.cpp ${CMAKE_SOURCE_DIR}/src/*.h)
 list(REMOVE_ITEM HTTP_LIB_SOURCES ${CMAKE_SOURCE_DIR}/src/main.cpp)
 
-option(DISABLE_HTTPS "Disable HTTPS support" OFF)
-
 add_compile_options(-Wall -Wextra -Werror)
 
 set(SANITIZE "" CACHE STRING "Sanitizers to build with, e.g. address,undefined or thread")
@@ -35,28 +33,14 @@ if (CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
 	add_link_options(-fexperimental-library)
 endif()
 
-find_package(OpenSSL)
-
-if (NOT DISABLE_HTTPS AND OpenSSL_FOUND)
-	message(STATUS "HTTPS support enabled.")
-	set(SSL_LIBS OpenSSL::SSL OpenSSL::Crypto)
-else()
-	message(STATUS "HTTPS support disabled.")
-	add_definitions(-DDISABLE_HTTPS)
-	set(DISABLE_HTTPS ON)
-	set(SSL_LIBS "")
-	list(REMOVE_ITEM HTTP_LIB_SOURCES 
-		${CMAKE_SOURCE_DIR}/src/SSLSocketHandler.cpp 
-		${CMAKE_SOURCE_DIR}/src/SSLSocketHandler.h
-	)
-endif()
+find_package(OpenSSL REQUIRED)
 
 add_library(http_lib ${HTTP_LIB_SOURCES})
-target_link_libraries(http_lib PRIVATE pthread ${SSL_LIBS})
+target_link_libraries(http_lib PUBLIC OpenSSL::SSL OpenSSL::Crypto PRIVATE pthread)
 target_include_directories(http_lib PUBLIC ${CMAKE_SOURCE_DIR}/src)
 
 add_executable(ou_http_server src/main.cpp)
-target_link_libraries(ou_http_server PRIVATE http_lib ${SSL_LIBS})
+target_link_libraries(ou_http_server PRIVATE http_lib)
 
 enable_testing()
 add_subdirectory(tests)

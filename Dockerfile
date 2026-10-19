@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y \
 	ninja-build \
 	cppcheck \
 	libboost-test-dev \
+	libssl-dev \
 	python3 \
 	python3-pip \
 	wrk \

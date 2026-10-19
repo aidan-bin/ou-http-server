@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        preset: [default, no-https, asan, tsan]
+        preset: [default, asan, tsan]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4

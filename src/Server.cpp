@@ -252,14 +252,10 @@ std::expected<void, Server::StartError> Server::start() {
 	}
 
 	try {
-#ifndef DISABLE_HTTPS
-		if (config_.https.enabled) {
+		if (config_.https.enabled)
 			socketHandler_ = std::make_unique<SSLSocketHandler>(config_.https);
-		} else
-#endif
-		{
+		else
 			socketHandler_ = std::make_unique<PlainSocketHandler>();
-		}
 	} catch (const std::exception &e) {
 		return std::unexpected(StartError{ .step = std::format("initialize socket handler: {}", e.what()), .code = {} });
 	}

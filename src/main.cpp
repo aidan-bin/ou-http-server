@@ -51,9 +51,7 @@ int runServer(const auto &hasFlag, const auto &numberFlag) {
 	config.skipSymlinkCheck = hasFlag("--skip-symlink-check");
 	config.logRequests = !hasFlag("--no-request-log");
 	config.handlerThreads = numberFlag("--handler-threads=");
-#ifndef DISABLE_HTTPS
-	config.https = { .enabled = true, .certPath = "./example/certs/cert.pem", .keyPath = "./example/certs/key.pem" };
-#endif
+	config.https = { .enabled = !hasFlag("--no-tls"), .certPath = "./example/certs/cert.pem", .keyPath = "./example/certs/key.pem" };
 
 	Server server(config);
 
