@@ -272,23 +272,23 @@ void Server::stop() {
 
 void Server::addMiddleware(std::shared_ptr<Middleware> middleware) { middlewares_.push_back(std::move(middleware)); }
 
-void Server::registerPathHandler(Method method, const std::string &path, Handler handler) {
-	pathHandlers_[{ method, path }] = std::move(handler);
+void Server::registerPathHandler(Method method, const std::string &path, AnyHandler handler) {
+	pathHandlers_[{ method, path }] = std::move(handler.handler);
 }
 
-void Server::registerPatternHandler(Method method, const std::string &pattern, Handler handler) {
-	patternHandlers_.push_back({ .method = method, .pattern = std::regex(pattern), .handler = std::move(handler) });
+void Server::registerPatternHandler(Method method, const std::string &pattern, AnyHandler handler) {
+	patternHandlers_.push_back({ .method = method, .pattern = std::regex(pattern), .handler = std::move(handler.handler) });
 }
 
-void Server::registerPathHandler(std::initializer_list<Method> methods, const std::string &path, const Handler &handler) {
+void Server::registerPathHandler(std::initializer_list<Method> methods, const std::string &path, const AnyHandler &handler) {
 	for (const Method method : methods) {
-		registerPathHandler(method, path, handler);
+		registerPathHandler(method, path, handler.handler);
 	}
 }
 
-void Server::registerPatternHandler(std::initializer_list<Method> methods, const std::string &pattern, const Handler &handler) {
+void Server::registerPatternHandler(std::initializer_list<Method> methods, const std::string &pattern, const AnyHandler &handler) {
 	for (const Method method : methods) {
-		registerPatternHandler(method, pattern, handler);
+		registerPatternHandler(method, pattern, handler.handler);
 	}
 }
 
@@ -323,13 +323,18 @@ Task<Response> Server::handle(Request &request) const {
 	return handlerFor(request)(request);
 }
 
-const Server::Handler &Server::handlerFor(const Request &request) const {
+const Server::Handler &Server::handlerFor(Request &request) const {
 	if (const auto path = pathHandlers_.find({ request.method, request.path }); path != pathHandlers_.end())
 		return path->second;
 
+	std::smatch match;
 	for (const PatternRoute &pattern : patternHandlers_) {
-		if (pattern.method == request.method && std::regex_match(request.path, pattern.pattern))
-			return pattern.handler;
+		if (pattern.method != request.method || !std::regex_match(request.path, match, pattern.pattern))
+			continue;
+
+		for (size_t i = 0; i < match.size(); ++i)
+			request.pathParams.emplace_back(match.position(i), match.length(i));
+		return pattern.handler;
 	}
 
 	return staticFiles_;

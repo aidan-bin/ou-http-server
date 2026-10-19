@@ -28,7 +28,8 @@ public:
 
 	[[nodiscard]] size_t size() const;
 
-	Response handle(const Request &request);
+	// Serves GET, PUT and DELETE on key; the body is the value
+	Response handle(const Request &request, const std::string &key);
 
 private:
 	mutable std::mutex mutex_;

@@ -33,15 +33,7 @@ size_t KVStore::size() const {
 	return store_.size();
 }
 
-Response KVStore::handle(const Request &request) {
-	const std::map<std::string, std::string> params = parseQuery(request.query);
-
-	const auto keyIt = params.find("key");
-	if (keyIt == params.end() || keyIt->second.empty()) {
-		return Response::plainText(400, "Missing key parameter");
-	}
-	const std::string &key = keyIt->second;
-
+Response KVStore::handle(const Request &request, const std::string &key) {
 	switch (request.method) {
 		using enum Method;
 	case GET:

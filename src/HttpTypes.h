@@ -1,6 +1,8 @@
 #pragma once
 
 #include <array>
+#include <charconv>
+#include <concepts>
 #include <cstdint>
 #include <expected>
 #include <format>
@@ -8,6 +10,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -62,6 +65,19 @@ struct CaseInsensitiveLess {
 
 // HTTP field names are case-insensitive
 using Headers = std::map<std::string, std::string, CaseInsensitiveLess>;
+
+// NOLINTBEGIN(cppcoreguidelines-pro-bounds-pointer-arithmetic,bugprone-suspicious-stringview-data-usage)
+// Parses all of text as a number; nullopt if anything is left over
+template <std::integral T>
+[[nodiscard]] std::optional<T> parseNumber(std::string_view text, int base = 10) {
+	T value{};
+	const char *end = text.data() + text.size();
+	const auto [stopped, ec] = std::from_chars(text.data(), end, value, base);
+	if (ec != std::errc{} || stopped != end)
+		return std::nullopt;
+	return value;
+}
+// NOLINTEND(cppcoreguidelines-pro-bounds-pointer-arithmetic,bugprone-suspicious-stringview-data-usage)
 
 // --- URLs ---
 
@@ -124,12 +140,19 @@ struct Request {
 
 	std::optional<sockaddr_in> clientAddr;
 
+	// Pattern route capture groups as (offset, length) into path.
+	// Offsets, not string_views: with SSO, views would not survive a Request move.
+	std::vector<std::pair<size_t, size_t>> pathParams;
+
 	// Parses the head without the blank line; fails with 505 for an unsupported version, else 400
 	[[nodiscard]] static std::expected<Request, int> parse(std::string_view head);
 
 	// Case-insensitive; the last duplicate wins
 	[[nodiscard]] std::optional<std::string_view> header(std::string_view name) const;
 	[[nodiscard]] std::optional<size_t> contentLength() const;
+
+	// Capture group index (0 = full match); nullopt if out of range
+	[[nodiscard]] std::optional<std::string_view> pathParam(size_t index) const;
 
 	// HTTP/1.1 keeps the connection open unless asked not to
 	[[nodiscard]] bool wantsKeepAlive() const;

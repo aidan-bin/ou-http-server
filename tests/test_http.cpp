@@ -4,6 +4,7 @@
 
 #include "AccessLog.h"
 #include "Awaitables.h"
+#include "Extractors.h"
 #include "HttpTypes.h"
 #include "KVStore.h"
 #include "Logging.h"
@@ -406,6 +407,67 @@ BOOST_AUTO_TEST_CASE(test_multi_method_registration) {
 	BOOST_CHECK_EQUAL(server.handleRequest(sMakeRequest("/multi", Method::POST)).statusCode, 404);
 }
 
+static_assert(Extractor<Query<"key">>);
+
+BOOST_AUTO_TEST_CASE(test_query_extractor) {
+	Request request = sMakeRequest("/");
+	request.query = "name=my%20name&n=42&bad=4x&empty=";
+
+	BOOST_CHECK_EQUAL(Query<"name">::extract(request)->value, "my name");
+	BOOST_CHECK_EQUAL((Query<"n", int>::extract(request)->value), 42);
+
+	const auto bad = Query<"bad", int>::extract(request);
+	BOOST_REQUIRE(!bad);
+	BOOST_CHECK_EQUAL(bad.error().statusCode, 400);
+	BOOST_CHECK_EQUAL(bad.error().body, "Missing or bad bad parameter");
+	BOOST_CHECK(!Query<"empty">::extract(request));
+	BOOST_CHECK(!Query<"missing">::extract(request));
+}
+
+BOOST_AUTO_TEST_CASE(test_pattern_captures) {
+	TestServer server(sConfig("."));
+	server.registerPatternHandler(Method::GET, R"(/users/(\w+)/posts/(\d+)?)", [](const Request &request) {
+		return Response::plainText(200, std::format("{}|{}|{}", request.pathParam(1).value_or("-"), request.pathParam(2).value_or("-"),
+																								request.pathParam(3).value_or("-")));
+	});
+	server.registerPatternHandler(Method::GET, R"(/id/(\w+))",
+																[](Path<1, int> id) { return Response::plainText(200, std::to_string(id.value)); });
+
+	BOOST_CHECK_EQUAL(server.handleRequest(sMakeRequest("/users/ann/posts/7")).body, "ann|7|-");
+	BOOST_CHECK_EQUAL(server.handleRequest(sMakeRequest("/users/ann/posts/")).body, "ann||-"); // Unmatched group is empty
+	BOOST_CHECK_EQUAL(server.handleRequest(sMakeRequest("/id/42")).body, "42");
+	BOOST_CHECK_EQUAL(server.handleRequest(sMakeRequest("/id/abc")).body, "Bad path parameter 1");
+}
+
+BOOST_AUTO_TEST_CASE(test_extracting_handler) {
+	TestServer server(sConfig("."));
+	server.registerPathHandler(Method::GET, "/add", [](Query<"a", int> a, Query<"b", int> b) {
+		return Response::plainText(200, std::to_string(a.value + b.value));
+	});
+	server.registerPathHandler({ Method::GET, Method::PUT }, "/echo", [](const Request &request, Query<"name"> name) -> ou::Task<Response> {
+		co_await sleepFor(std::chrono::milliseconds(1));
+		co_return Response::plainText(200, std::format("{} {}", request.method, name.value));
+	});
+
+	const auto call = [&](std::string_view path, std::string_view query, Method method = Method::GET) {
+		Request request = sMakeRequest(std::string(path), method);
+		request.query = query;
+		return server.handleRequest(request);
+	};
+
+	BOOST_CHECK_EQUAL(call("/add", "a=2&b=3").body, "5");
+	BOOST_CHECK_EQUAL(call("/add", "a=x&b=y").body, "Missing or bad a parameter"); // First failure wins
+	BOOST_CHECK_EQUAL(call("/add", "a=2").statusCode, 400);
+	BOOST_CHECK_EQUAL(call("/echo", "name=ou", Method::PUT).body, "PUT ou");
+	BOOST_CHECK_EQUAL(call("/echo", "").statusCode, 400);
+
+	server.registerPatternHandler(Method::GET, R"(/scaled/(\d+))", [](Path<1, int> n, Query<"by", int> by) {
+		return Response::plainText(200, std::to_string(n.value * by.value));
+	});
+	BOOST_CHECK_EQUAL(call("/scaled/3", "by=4").body, "12");
+	BOOST_CHECK_EQUAL(call("/scaled/3", "").statusCode, 400);
+}
+
 // --- Static file serving ---
 
 BOOST_AUTO_TEST_CASE(test_static_file_serving_and_mime_types) {
@@ -513,27 +575,22 @@ BOOST_AUTO_TEST_CASE(test_preloaded_files_are_served_from_memory) {
 
 // --- Key-value store ---
 
-BOOST_AUTO_TEST_CASE(test_kv_store_uses_decoded_query) {
+BOOST_AUTO_TEST_CASE(test_kv_store_methods) {
 	KVStore store;
 
 	Request put = sMakeRequest("/kv", Method::PUT);
-	put.query = "key=my%20key";
 	put.body = "value";
-	BOOST_CHECK_EQUAL(store.handle(put).statusCode, 200);
+	BOOST_CHECK_EQUAL(store.handle(put, "my key").statusCode, 200);
 	BOOST_CHECK_EQUAL(store.size(), 1U);
 	BOOST_CHECK(store.get("my key") == std::optional<std::string>("value"));
 
-	Request get = sMakeRequest("/kv");
-	get.query = "key=my+key";
-	BOOST_CHECK_EQUAL(store.handle(get).body, "value");
+	BOOST_CHECK_EQUAL(store.handle(sMakeRequest("/kv"), "my key").body, "value");
+	BOOST_CHECK_EQUAL(store.handle(sMakeRequest("/kv"), "other").statusCode, 404);
 
-	BOOST_CHECK_EQUAL(store.handle(sMakeRequest("/kv")).statusCode, 400);
-
-	Request remove = sMakeRequest("/kv", Method::DELETE);
-	remove.query = "key=my%20key";
-	BOOST_CHECK_EQUAL(store.handle(remove).statusCode, 200);
+	const Request remove = sMakeRequest("/kv", Method::DELETE);
+	BOOST_CHECK_EQUAL(store.handle(remove, "my key").statusCode, 200);
 	BOOST_CHECK_EQUAL(store.size(), 0U);
-	BOOST_CHECK_EQUAL(store.handle(remove).statusCode, 404);
+	BOOST_CHECK_EQUAL(store.handle(remove, "my key").statusCode, 404);
 }
 
 // --- File descriptor ownership ---

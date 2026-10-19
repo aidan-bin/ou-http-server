@@ -36,19 +36,7 @@ public:
 	}
 };
 
-std::optional<std::chrono::milliseconds> sMillisParam(const ou::http::Request &request) {
-	const auto params = ou::http::parseQuery(request.query);
-	const auto it = params.find("ms");
-	if (it == params.end())
-		return std::nullopt;
-
-	int ms = 0;
-	const char *end = std::to_address(it->second.end());
-	const auto [stopped, ec] = std::from_chars(it->second.data(), end, ms);
-	if (ec != std::errc{} || stopped != end)
-		return std::nullopt;
-	return std::chrono::milliseconds(std::clamp(ms, 0, 10'000));
-}
+std::chrono::milliseconds sDemoDuration(int ms) { return std::chrono::milliseconds(std::clamp(ms, 0, 10'000)); }
 
 int runServer(const auto &hasFlag, const auto &numberFlag) {
 	using namespace ou::http;
@@ -79,23 +67,17 @@ int runServer(const auto &hasFlag, const auto &numberFlag) {
 
 	const auto kvStore = std::make_shared<KVStore>();
 	server.registerPathHandler({ Method::GET, Method::PUT, Method::DELETE }, "/kv",
-														 [kvStore](const Request &request) { return kvStore->handle(request); });
+														 [kvStore](const Request &request, Query<"key"> key) { return kvStore->handle(request, key.value); });
+	server.registerPatternHandler({ Method::GET, Method::PUT, Method::DELETE }, "/kv/(.+)",
+																[kvStore](const Request &request, Path<1> key) { return kvStore->handle(request, key.value); });
 
-	server.registerPathHandler(Method::GET, "/sleep", [](const Request &request) -> ou::Task<Response> {
-		const std::optional<std::chrono::milliseconds> duration = sMillisParam(request);
-		if (!duration)
-			co_return Response::plainText(400, "Missing or bad ms parameter");
-
-		co_await ou::http::sleepFor(*duration);
+	server.registerPathHandler(Method::GET, "/sleep", [](Query<"ms", int> ms) -> ou::Task<Response> {
+		co_await ou::http::sleepFor(sDemoDuration(ms.value));
 		co_return Response::plainText(200, "OK");
 	});
 
-	server.registerPathHandler(Method::GET, "/work", [](const Request &request) -> ou::Task<Response> {
-		const std::optional<std::chrono::milliseconds> duration = sMillisParam(request);
-		if (!duration)
-			co_return Response::plainText(400, "Missing or bad ms parameter");
-
-		co_return co_await ou::http::offload([deadline = std::chrono::steady_clock::now() + *duration] {
+	server.registerPathHandler(Method::GET, "/work", [](Query<"ms", int> ms) -> ou::Task<Response> {
+		co_return co_await ou::http::offload([deadline = std::chrono::steady_clock::now() + sDemoDuration(ms.value)] {
 			while (std::chrono::steady_clock::now() < deadline) {
 			}
 			return Response::plainText(200, "OK");

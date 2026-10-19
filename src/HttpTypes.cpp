@@ -1,8 +1,6 @@
 #include "HttpTypes.h"
 
 #include <algorithm>
-#include <charconv>
-#include <concepts>
 #include <iterator>
 #include <ostream>
 #include <ranges>
@@ -25,18 +23,6 @@ namespace {
 			return static_cast<char>(ch - 'A' + 'a');
 		return ch;
 	}
-
-	// NOLINTBEGIN(cppcoreguidelines-pro-bounds-pointer-arithmetic,bugprone-suspicious-stringview-data-usage)
-	template <std::integral T>
-	std::optional<T> sParseNumber(std::string_view text, int base = 10) {
-		T value{};
-		const char *end = text.data() + text.size();
-		const auto [stopped, ec] = std::from_chars(text.data(), end, value, base);
-		if (ec != std::errc{} || stopped != end)
-			return std::nullopt;
-		return value;
-	}
-	// NOLINTEND(cppcoreguidelines-pro-bounds-pointer-arithmetic,bugprone-suspicious-stringview-data-usage)
 
 	// "HTTP/" DIGIT "." DIGIT
 	bool sIsHttpVersion(std::string_view version) {
@@ -76,7 +62,7 @@ std::string percentDecode(std::string_view input, bool plusAsSpace) {
 		}
 
 		if (input[i] == '%' && i + 2 < input.size()) {
-			if (const std::optional<unsigned char> byte = sParseNumber<unsigned char>(input.substr(i + 1, 2), 16)) {
+			if (const std::optional<unsigned char> byte = parseNumber<unsigned char>(input.substr(i + 1, 2), 16)) {
 				decoded += static_cast<char>(*byte);
 				i += 2;
 				continue;
@@ -210,7 +196,14 @@ std::optional<std::string_view> Request::header(std::string_view name) const {
 }
 
 std::optional<size_t> Request::contentLength() const {
-	return header("Content-Length").and_then([](std::string_view value) { return sParseNumber<size_t>(trim(value)); });
+	return header("Content-Length").and_then([](std::string_view value) { return parseNumber<size_t>(trim(value)); });
+}
+
+std::optional<std::string_view> Request::pathParam(size_t index) const {
+	if (index >= pathParams.size())
+		return std::nullopt;
+	const auto [offset, length] = pathParams[index];
+	return std::string_view(path).substr(offset, length);
 }
 
 bool Request::wantsKeepAlive() const {

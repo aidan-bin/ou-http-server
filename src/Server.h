@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ConnectionLoop.h"
+#include "Extractors.h"
 #include "HandlerPool.h"
 #include "HttpTypes.h"
 #include "SSLSocketHandler.h"
@@ -51,6 +52,19 @@ class Server {
 public:
 	// Function or coroutine that handles a request and returns a response
 	using Handler = std::function<Task<Response>(const Request &)>;
+
+	// A Handler, or a lambda taking Extractors (wrapped by extracting())
+	struct AnyHandler {
+		template <typename F>
+		AnyHandler(F handler) { // NOLINT(*-explicit-*) converts at the call site by design
+			if constexpr (std::convertible_to<F, Handler>)
+				this->handler = std::move(handler);
+			else
+				this->handler = extracting(std::move(handler));
+		}
+
+		Handler handler;
+	};
 
 	enum class Model : uint8_t { ThreadPerCore, EventLoop };
 
@@ -112,10 +126,10 @@ public:
 	void addMiddleware(std::shared_ptr<Middleware> middleware);
 
 	// Re-registering an exact path replaces its handler; patterns accumulate and the first match wins
-	void registerPathHandler(Method method, const std::string &path, Handler handler);
-	void registerPatternHandler(Method method, const std::string &pattern, Handler handler);
-	void registerPathHandler(std::initializer_list<Method> methods, const std::string &path, const Handler &handler);
-	void registerPatternHandler(std::initializer_list<Method> methods, const std::string &pattern, const Handler &handler);
+	void registerPathHandler(Method method, const std::string &path, AnyHandler handler);
+	void registerPatternHandler(Method method, const std::string &pattern, AnyHandler handler);
+	void registerPathHandler(std::initializer_list<Method> methods, const std::string &path, const AnyHandler &handler);
+	void registerPatternHandler(std::initializer_list<Method> methods, const std::string &pattern, const AnyHandler &handler);
 
 protected:
 	// Taken by value: middlewares mutate the request, and later stages read the mutated copy
@@ -143,8 +157,8 @@ private:
 	// Runs middlewares, then the matching handler; may finish later if the handler suspends
 	[[nodiscard]] Task<Response> handle(Request &request) const;
 
-	// Finds the handler for a request; static files when none matches
-	[[nodiscard]] const Handler &handlerFor(const Request &request) const;
+	// Exact path, then pattern, then static files; stores pattern captures in request.pathParams
+	[[nodiscard]] const Handler &handlerFor(Request &request) const;
 
 	// Runs every middleware's postProcess; drops the body for HEAD
 	[[nodiscard]] Response postProcess(const Request &request, Response response) const;

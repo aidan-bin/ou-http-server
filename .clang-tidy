@@ -15,3 +15,4 @@ CheckOptions:
   readability-identifier-naming.PrivateMemberSuffix: _
   readability-identifier-naming.GlobalVariablePrefix: g_
   readability-identifier-naming.ConstexprVariablePrefix: k
+  performance-unnecessary-value-param.AllowedTypes: '^(Query|Path)$'
