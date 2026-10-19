@@ -1264,4 +1264,21 @@ BOOST_DATA_TEST_CASE(test_tls, bdata::make(kModels), model) {
 		BOOST_CHECK(client.receive().ends_with("over tls"));
 }
 
+BOOST_AUTO_TEST_CASE(test_blocking_loop_times_out_silent_tls_peer) {
+	const TempDir root("tls-silent");
+
+	// Checks the socket timeouts are set before the handshake; needs TLS, since a plain-socket handshake is a no-op
+
+	Server::Config config = sConfig(root.path(), Server::Model::ThreadPerCore);
+	config.readTimeout = std::chrono::seconds(1);
+	config.https = { .enabled = true,
+									 .certPath = std::filesystem::path(TEST_CERT_DIR) / "cert.pem",
+									 .keyPath = std::filesystem::path(TEST_CERT_DIR) / "key.pem" };
+	Server server(config);
+	BOOST_REQUIRE(server.start());
+
+	const ou::UniqueFd fd = sConnect(server.port());
+	sCheckClosed(fd);
+}
+
 #endif // DISABLE_HTTPS
