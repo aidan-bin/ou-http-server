@@ -34,7 +34,23 @@ struct FixedString {
 	std::array<char, N> chars{};
 };
 
-// Value types supported by Query and Path
+template <size_t N>
+struct PathKey {
+	// NOLINTNEXTLINE(google-explicit-constructor) converts from an index by design
+	constexpr PathKey(size_t index) : index(index), name("") {}
+	// NOLINTNEXTLINE(google-explicit-constructor,*-avoid-c-arrays) converts from a literal by design
+	constexpr PathKey(const char (&text)[N]) : name(text) {}
+
+	[[nodiscard]] constexpr bool named() const { return N > 1; }
+
+	size_t index = 0;
+	FixedString<N> name;
+};
+
+// An index has no name, so N is 1
+PathKey(size_t) -> PathKey<1>;
+
+// Value types supported by Query, Header and Path
 template <typename T>
 concept ParamType = std::same_as<T, std::string> || std::integral<T>;
 
@@ -69,16 +85,32 @@ struct Query {
 	}
 };
 
-// Capture group Index (1-based) of a pattern route, parsed as T; 400 if empty or malformed
-template <size_t Index, ParamType T = std::string>
+// Required request header Name, parsed as T; 400 if missing, empty or malformed
+template <FixedString Name, ParamType T = std::string>
+struct Header {
+	T value;
+
+	[[nodiscard]] static std::expected<Header, Response> extract(const Request &request) {
+		std::optional<T> parsed = request.header(Name.view()).and_then(detail::parseParam<T>);
+
+		if (!parsed)
+			return std::unexpected(Response::plainText(400, std::format("Missing or bad {} header", Name.view())));
+		return Header{ std::move(*parsed) };
+	}
+};
+
+// Path<1> is a capture group, Path<"id"> an {id} segment; parsed as T, 400 if empty or malformed
+template <PathKey Key, ParamType T = std::string>
 struct Path {
 	T value;
 
 	[[nodiscard]] static std::expected<Path, Response> extract(const Request &request) {
-		std::optional<T> parsed = request.pathParam(Index).and_then(detail::parseParam<T>);
+		std::optional<T> parsed
+				= (Key.named() ? request.pathParam(Key.name.view()) : request.pathParam(Key.index)).and_then(detail::parseParam<T>);
 
 		if (!parsed)
-			return std::unexpected(Response::plainText(400, std::format("Bad path parameter {}", Index)));
+			return std::unexpected(Response::plainText(
+					400, std::format("Bad path parameter {}", Key.named() ? std::string(Key.name.view()) : std::to_string(Key.index))));
 		return Path{ std::move(*parsed) };
 	}
 };

@@ -125,7 +125,8 @@ public:
 
 	void addMiddleware(std::shared_ptr<Middleware> middleware);
 
-	// Re-registering an exact path replaces its handler; patterns accumulate and the first match wins
+	// Re-registering an exact path replaces its handler; patterns accumulate and the first match wins.
+	// A pattern with {name} segments matches its other text literally; one without is a regex.
 	void registerPathHandler(Method method, const std::string &path, AnyHandler handler);
 	void registerPatternHandler(Method method, const std::string &pattern, AnyHandler handler);
 	void registerPathHandler(std::initializer_list<Method> methods, const std::string &path, const AnyHandler &handler);
@@ -143,6 +144,7 @@ private:
 	struct PatternRoute {
 		Method method = Method::GET;
 		std::regex pattern;
+		std::vector<std::string> names;
 		Handler handler;
 	};
 
@@ -157,7 +159,7 @@ private:
 	// Runs middlewares, then the matching handler; may finish later if the handler suspends
 	[[nodiscard]] Task<Response> handle(Request &request) const;
 
-	// Exact path, then pattern, then static files; stores pattern captures in request.pathParams
+	// Exact path, then pattern, then static files; stores pattern captures in request
 	[[nodiscard]] const Handler &handlerFor(Request &request) const;
 
 	// Runs every middleware's postProcess; drops the body for HEAD

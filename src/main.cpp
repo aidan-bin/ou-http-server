@@ -68,8 +68,11 @@ int runServer(const auto &hasFlag, const auto &numberFlag) {
 	const auto kvStore = std::make_shared<KVStore>();
 	server.registerPathHandler({ Method::GET, Method::PUT, Method::DELETE }, "/kv",
 														 [kvStore](const Request &request, Query<"key"> key) { return kvStore->handle(request, key.value); });
-	server.registerPatternHandler({ Method::GET, Method::PUT, Method::DELETE }, "/kv/(.+)",
-																[kvStore](const Request &request, Path<1> key) { return kvStore->handle(request, key.value); });
+	server.registerPatternHandler({ Method::GET, Method::PUT, Method::DELETE }, "/kv/{key}",
+																[kvStore](const Request &request, Path<"key"> key) { return kvStore->handle(request, key.value); });
+
+	server.registerPathHandler(Method::GET, "/whoami",
+														 [](Header<"User-Agent"> agent) { return Response::plainText(200, std::move(agent.value)); });
 
 	server.registerPathHandler(Method::GET, "/sleep", [](Query<"ms", int> ms) -> ou::Task<Response> {
 		co_await ou::http::sleepFor(sDemoDuration(ms.value));

@@ -167,6 +167,33 @@ std::string sGenerateDirectoryIndex(const std::string &requestPath, const std::f
 
 ou::http::Server::StartError sStartError(const ou::SocketError &error) { return { .step = std::string(error.step), .code = error.code }; }
 
+// Regex and group names for a {name} pattern; any other pattern is already a regex
+std::pair<std::string, std::vector<std::string>> sCompileSegments(const std::string &pattern) {
+	const std::regex segment(R"(\{([A-Za-z_]\w*)\})");
+	std::string regex;
+	std::vector<std::string> names;
+	const auto appendLiteral = [&regex](std::string_view text) {
+		for (const char c : text) {
+			if (std::string_view(R"(\^$.|?*+()[]{})").contains(c))
+				regex += '\\';
+			regex += c;
+		}
+	};
+
+	std::string_view rest = pattern;
+	for (auto it = std::sregex_iterator(pattern.begin(), pattern.end(), segment); it != std::sregex_iterator(); ++it) {
+		appendLiteral(it->prefix().str());
+		regex += "([^/]+)";
+		names.push_back((*it)[1].str());
+		rest = std::string_view(pattern).substr(it->position() + it->length());
+	}
+
+	if (names.empty())
+		return { pattern, {} };
+	appendLiteral(rest);
+	return { std::move(regex), std::move(names) };
+}
+
 } // namespace
 
 namespace ou::http {
@@ -277,7 +304,9 @@ void Server::registerPathHandler(Method method, const std::string &path, AnyHand
 }
 
 void Server::registerPatternHandler(Method method, const std::string &pattern, AnyHandler handler) {
-	patternHandlers_.push_back({ .method = method, .pattern = std::regex(pattern), .handler = std::move(handler.handler) });
+	auto [regex, names] = sCompileSegments(pattern);
+	patternHandlers_.push_back(
+			{ .method = method, .pattern = std::regex(regex), .names = std::move(names), .handler = std::move(handler.handler) });
 }
 
 void Server::registerPathHandler(std::initializer_list<Method> methods, const std::string &path, const AnyHandler &handler) {
@@ -334,6 +363,7 @@ const Server::Handler &Server::handlerFor(Request &request) const {
 
 		for (size_t i = 0; i < match.size(); ++i)
 			request.pathParams.emplace_back(match.position(i), match.length(i));
+		request.pathParamNames = pattern.names;
 		return pattern.handler;
 	}
 

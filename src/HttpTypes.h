@@ -8,6 +8,7 @@
 #include <format>
 #include <map>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -143,6 +144,8 @@ struct Request {
 	// Pattern route capture groups as (offset, length) into path.
 	// Offsets, not string_views: with SSO, views would not survive a Request move.
 	std::vector<std::pair<size_t, size_t>> pathParams;
+	// Names of groups 1.. of a {name} route; views the route, which outlives the request
+	std::span<const std::string> pathParamNames;
 
 	// Parses the head without the blank line; fails with 505 for an unsupported version, else 400
 	[[nodiscard]] static std::expected<Request, int> parse(std::string_view head);
@@ -153,6 +156,8 @@ struct Request {
 
 	// Capture group index (0 = full match); nullopt if out of range
 	[[nodiscard]] std::optional<std::string_view> pathParam(size_t index) const;
+	// nullopt if the route has no such {name}
+	[[nodiscard]] std::optional<std::string_view> pathParam(std::string_view name) const;
 
 	// HTTP/1.1 keeps the connection open unless asked not to
 	[[nodiscard]] bool wantsKeepAlive() const;

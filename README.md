@@ -10,7 +10,7 @@ With the [dependencies](#dependencies) installed:
 
 ```
 cmake --workflow --preset default
-./build/default-$(uname)/ou_http_server   # add --thread-per-core for the blocking model
+./build/default-$(uname)/ou_http_server
 ```
 
 The demo serves `example/www` on port 8080 over HTTPS with the self-signed certificate in `example/certs`, so pass `-k` to curl:
@@ -20,6 +20,7 @@ curl -k https://localhost:8080/                                # directory listi
 curl -k https://localhost:8080/file1.txt
 curl -k -X PUT -d world 'https://localhost:8080/kv?key=hello'  # in-memory key-value store
 curl -k 'https://localhost:8080/kv?key=hello'
+curl -k https://localhost:8080/whoami                          # echoes the User-Agent header
 curl -k 'https://localhost:8080/sleep?ms=200'                  # coroutine handler waiting on a timer
 ```
 

@@ -206,6 +206,13 @@ std::optional<std::string_view> Request::pathParam(size_t index) const {
 	return std::string_view(path).substr(offset, length);
 }
 
+std::optional<std::string_view> Request::pathParam(std::string_view name) const {
+	const auto found = std::ranges::find(pathParamNames, name);
+	if (found == pathParamNames.end())
+		return std::nullopt;
+	return pathParam(static_cast<size_t>(found - pathParamNames.begin()) + 1);
+}
+
 bool Request::wantsKeepAlive() const {
 	const std::optional<std::string_view> connection = header("Connection");
 

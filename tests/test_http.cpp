@@ -439,6 +439,21 @@ BOOST_AUTO_TEST_CASE(test_pattern_captures) {
 	BOOST_CHECK_EQUAL(server.handleRequest(sMakeRequest("/id/abc")).body, "Bad path parameter 1");
 }
 
+BOOST_AUTO_TEST_CASE(test_named_segments) {
+	TestServer server(sConfig("."));
+	server.registerPatternHandler(Method::GET, "/users/{user}/posts/{id}.json", [](Path<"user"> user, Path<"id", int> id) {
+		return Response::plainText(200, std::format("{} {}", user.value, id.value));
+	});
+	server.registerPatternHandler(Method::GET, "/raw/{n}",
+																[](Path<1> n, Path<"missing"> missing) { return Response::plainText(200, n.value + missing.value); });
+
+	BOOST_CHECK_EQUAL(server.handleRequest(sMakeRequest("/users/ann/posts/7.json")).body, "ann 7");
+	BOOST_CHECK_EQUAL(server.handleRequest(sMakeRequest("/users/ann/posts/x.json")).body, "Bad path parameter id");
+	BOOST_CHECK_EQUAL(server.handleRequest(sMakeRequest("/users/ann/posts/7xjson")).statusCode, 404); // "." is literal
+	BOOST_CHECK_EQUAL(server.handleRequest(sMakeRequest("/users/a/b/posts/7.json")).statusCode, 404); // A segment has no "/"
+	BOOST_CHECK_EQUAL(server.handleRequest(sMakeRequest("/raw/1")).body, "Bad path parameter missing");
+}
+
 BOOST_AUTO_TEST_CASE(test_extracting_handler) {
 	TestServer server(sConfig("."));
 	server.registerPathHandler(Method::GET, "/add", [](Query<"a", int> a, Query<"b", int> b) {
@@ -466,6 +481,15 @@ BOOST_AUTO_TEST_CASE(test_extracting_handler) {
 	});
 	BOOST_CHECK_EQUAL(call("/scaled/3", "by=4").body, "12");
 	BOOST_CHECK_EQUAL(call("/scaled/3", "").statusCode, 400);
+
+	server.registerPathHandler(Method::GET, "/agent", [](Header<"user-agent"> agent, Header<"X-Count", int> count) {
+		return Response::plainText(200, std::format("{} {}", agent.value, count.value));
+	});
+	Request request = sMakeRequest("/agent");
+	request.headers = { { "User-Agent", "ou" }, { "X-Count", "3" } };
+	BOOST_CHECK_EQUAL(server.handleRequest(request).body, "ou 3");
+	request.headers.pop_back();
+	BOOST_CHECK_EQUAL(server.handleRequest(request).body, "Missing or bad X-Count header");
 }
 
 // --- Static file serving ---
