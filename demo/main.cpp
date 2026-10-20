@@ -6,6 +6,7 @@
 #include "ou/http/Logging.h"
 #include "ou/http/Router.h"
 #include "ou/http/Server.h"
+#include "ou/http/StaticFiles.h"
 
 #include <algorithm>
 #include <atomic>
@@ -43,18 +44,25 @@ int runServer(const auto &hasFlag, const auto &numberFlag) {
 	using namespace ou::http;
 
 	Server::Config config;
-	config.servingDirectory = "./example/www";
 	config.port = 8080;
 	config.threadCount = 4;
-	config.enableDirectoryIndexing = true;
 	config.model = hasFlag("--thread-per-core") ? Server::Model::ThreadPerCore : Server::Model::EventLoop;
-	config.preloadBytes = hasFlag("--no-preload") ? 0 : size_t{ 64 } * 1024 * 1024;
-	config.skipSymlinkCheck = hasFlag("--skip-symlink-check");
 	config.logRequests = !hasFlag("--no-request-log");
 	config.handlerThreads = numberFlag("--handler-threads=");
 	config.https = { .enabled = !hasFlag("--no-tls"), .certPath = "./example/certs/cert.pem", .keyPath = "./example/certs/key.pem" };
 
+	const StaticFiles::Config filesConfig = { .directory = "./example/www",
+																						.enableDirectoryIndexing = true,
+																						.preloadBytes = hasFlag("--no-preload") ? 0 : size_t{ 64 } * 1024 * 1024,
+																						.skipSymlinkCheck = hasFlag("--skip-symlink-check") };
+	const auto files = StaticFiles::create(filesConfig);
+	if (!files) {
+		ou::logError("{}", files.error().message());
+		return EXIT_FAILURE;
+	}
+
 	Router router;
+	router.fallback(*files);
 
 	if (!hasFlag("--no-access-log")) {
 		const AccessLog::Config accessLogConfig = { .path = "access.log" };

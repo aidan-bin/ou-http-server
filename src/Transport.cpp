@@ -13,12 +13,11 @@ namespace ou::http {
 
 namespace {
 
-	Server::StartError sStartError(const SocketError &error) { return { .step = std::string(error.step), .code = error.code }; }
+	Error sStartError(const SocketError &error) { return { .step = std::string(error.step), .code = error.code }; }
 
 } // namespace
 
-std::expected<std::unique_ptr<Transport>, Server::StartError> Transport::start(const Server::Config &config, Dispatch dispatch,
-																																							 Reject reject) {
+std::expected<std::unique_ptr<Transport>, Error> Transport::start(const Server::Config &config, Dispatch dispatch, Reject reject) {
 	std::unique_ptr<SocketHandler> socketHandler;
 	try {
 		if (config.https.enabled)
@@ -26,10 +25,10 @@ std::expected<std::unique_ptr<Transport>, Server::StartError> Transport::start(c
 		else
 			socketHandler = std::make_unique<PlainSocketHandler>();
 	} catch (const std::exception &e) {
-		return std::unexpected(Server::StartError{ .step = std::format("initialize socket handler: {}", e.what()), .code = {} });
+		return std::unexpected(Error{ .step = std::format("initialize socket handler: {}", e.what()), .code = {} });
 	}
 
-	std::expected<Listener, Server::StartError> listener = openListener(config.port).transform_error(sStartError);
+	std::expected<Listener, Error> listener = openListener(config.port).transform_error(sStartError);
 	if (!listener)
 		return std::unexpected(std::move(listener).error());
 

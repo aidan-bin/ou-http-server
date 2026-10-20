@@ -2,6 +2,7 @@
 
 #include "ou/http/HttpTypes.h"
 #include "ou/http/Server.h"
+#include "ou/http/StaticFiles.h"
 
 #include <arpa/inet.h>
 #include <array>
@@ -32,6 +33,7 @@ using http::Request;
 using http::Response;
 using http::Router;
 using http::Server;
+using http::StaticFiles;
 using http::Task;
 
 inline constexpr std::array kModels{ Server::Model::ThreadPerCore, Server::Model::EventLoop };
@@ -92,21 +94,13 @@ inline Request makeRequest(const std::string &path, Method method = Method::GET)
 	return request;
 }
 
-inline Server::Config makeConfig(const std::filesystem::path &root, Server::Model model = Server::Config{}.model) {
+inline Server::Config makeConfig(Server::Model model = Server::Config{}.model) {
 	Server::Config config;
-	config.servingDirectory = root;
 	config.port = 0;
 	config.threadCount = 2;
 	config.model = model;
 	return config;
 }
-
-// Exposes static file serving for socket-free tests
-class TestServer : public Server {
-public:
-	using Server::handleStaticFileRequest;
-	using Server::Server;
-};
 
 // Runs a request through a router without sockets
 inline Response respond(const Router &router, Request request) {
@@ -117,7 +111,9 @@ inline Response respond(const Router &router, Request request) {
 struct ServingRoot {
 	TempDir root;
 
-	[[nodiscard]] Server::Config config(Server::Model model = Server::Config{}.model) const { return makeConfig(root.path(), model); }
+	[[nodiscard]] static Server::Config config(Server::Model model = Server::Config{}.model) { return makeConfig(model); }
+
+	[[nodiscard]] Router files() const { return Router().fallback(StaticFiles::create({ .directory = root.path() }).value()); }
 };
 
 } // namespace ou::test

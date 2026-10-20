@@ -21,8 +21,8 @@ namespace ou::http {
 class Transport {
 public:
 	// Binds the listening socket and starts config.threadCount loops
-	[[nodiscard]] static std::expected<std::unique_ptr<Transport>, Server::StartError> start(const Server::Config &config, Dispatch dispatch,
-																																													 Reject reject);
+	[[nodiscard]] static std::expected<std::unique_ptr<Transport>, Error> start(const Server::Config &config, Dispatch dispatch,
+																																							Reject reject);
 
 	// Use start(): this takes the resources it has already opened
 	Transport(const Server::Config &config, std::unique_ptr<SocketHandler> socketHandler, Listener listener, Dispatch dispatch,

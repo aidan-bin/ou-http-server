@@ -25,7 +25,7 @@ BOOST_DATA_TEST_CASE(test_server_round_trip, bdata::make(kModels), model) {
 	root.write("hello.txt", "hello socket");
 	root.write("large.txt", std::string(200000, 'x'));
 
-	Server server(config(model));
+	Server server(config(model), files());
 	BOOST_REQUIRE(server.start());
 	const uint16_t port = server.port();
 
@@ -58,7 +58,7 @@ BOOST_DATA_TEST_CASE(test_slow_reader_gets_whole_response, bdata::make(kModels),
 	constexpr size_t kSize = size_t{ 4 } * 1024 * 1024; // Past the socket buffers, forcing partial writes
 	root.write("huge.txt", std::string(kSize, 'x'));
 
-	Server server(config(model));
+	Server server(config(model), files());
 	BOOST_REQUIRE(server.start());
 
 	const Client client(server.port());
@@ -70,29 +70,23 @@ BOOST_DATA_TEST_CASE(test_slow_reader_gets_whole_response, bdata::make(kModels),
 }
 
 BOOST_AUTO_TEST_CASE(test_start_reports_failed_step) {
-	Server first(makeConfig("."));
+	Server first(makeConfig());
 	BOOST_REQUIRE(first.start());
 
-	Server::Config taken = makeConfig(".");
+	Server::Config taken = makeConfig();
 	taken.port = first.port();
 	Server second(taken);
 	const auto started = second.start();
 	BOOST_REQUIRE(!started);
 	BOOST_CHECK_EQUAL(started.error().step, "bind socket");
 	BOOST_CHECK(started.error().code == std::errc::address_in_use);
-
-	root.write("file.txt", "not a directory");
-	Server notDirectory(makeConfig(root.path() / "file.txt"));
-	BOOST_CHECK(notDirectory.start().error().code == std::errc::not_a_directory);
-	Server missing(makeConfig(root.path() / "missing"));
-	BOOST_CHECK(missing.start().error().code == std::errc::no_such_file_or_directory);
 }
 
 BOOST_DATA_TEST_CASE(test_keep_alive, bdata::make(kModels), model) {
 	root.write("a.txt", "aaa");
 	root.write("b.txt", "bbbb");
 
-	Server server(config(model));
+	Server server(config(model), files());
 	BOOST_REQUIRE(server.start());
 	const uint16_t port = server.port();
 
@@ -137,7 +131,7 @@ BOOST_DATA_TEST_CASE(test_keep_alive_can_be_disabled, bdata::make(kModels), mode
 
 	Server::Config closing = config(model);
 	closing.keepAlive = false;
-	Server server(closing);
+	Server server(closing, files());
 	BOOST_REQUIRE(server.start());
 
 	const Client client(server.port());

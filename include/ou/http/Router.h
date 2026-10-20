@@ -10,7 +10,6 @@
 #include <initializer_list>
 #include <map>
 #include <memory>
-#include <optional>
 #include <regex>
 #include <string>
 #include <utility>
@@ -49,9 +48,8 @@ public:
 	// Runs for every request, in the order added
 	Router &layer(std::shared_ptr<Middleware> middleware);
 
-	// Answers requests that no route matches (404 by default)
+	// Answers requests that no route matches (404 by default), e.g., with StaticFiles
 	Router &fallback(Handler handler);
-	[[nodiscard]] bool hasFallback() const noexcept { return fallback_.has_value(); }
 
 	// Layers' process(), then the exact path, then patterns, then the fallback, then every layer's
 	// postProcess(). May finish later if the handler suspends.
@@ -76,7 +74,9 @@ private:
 	// Exact paths are looked up; patterns are tried in registration order
 	std::map<std::pair<Method, std::string>, Handler> pathHandlers_;
 	std::vector<PatternRoute> patternHandlers_;
-	std::optional<Handler> fallback_;
+	Handler fallback_ = [](const Request &) {
+		return Response::error(404);
+	};
 	std::vector<std::shared_ptr<Middleware>> layers_;
 };
 

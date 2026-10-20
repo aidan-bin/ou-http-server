@@ -32,8 +32,6 @@ std::pair<std::string, std::vector<std::string>> sCompileSegments(const std::str
 	return { std::move(regex), std::move(names) };
 }
 
-ou::http::Response sNotFound(const ou::http::Request & /*request*/) { return ou::http::Response::error(404); }
-
 } // namespace
 
 namespace ou::http {
@@ -105,8 +103,7 @@ const Handler &Router::handlerFor(Request &request) const {
 		return route.handler;
 	}
 
-	static const Handler kNotFound = sNotFound;
-	return fallback_ ? *fallback_ : kNotFound;
+	return fallback_;
 }
 
 Response Router::postProcess(const Request &request, Response response) const {

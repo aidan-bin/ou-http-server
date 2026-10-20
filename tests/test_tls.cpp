@@ -61,7 +61,7 @@ BOOST_FIXTURE_TEST_SUITE(tls, ServingRoot)
 BOOST_DATA_TEST_CASE(test_tls, bdata::make(kModels), model) {
 	root.write("a.txt", "over tls");
 
-	Server server(sWithTls(config(model)));
+	Server server(sWithTls(config(model)), files());
 	BOOST_REQUIRE(server.start());
 	const uint16_t port = server.port();
 
