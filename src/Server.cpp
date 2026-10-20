@@ -166,38 +166,14 @@ std::string sGenerateDirectoryIndex(const std::string &requestPath, const std::f
 	return html;
 }
 
-// Regex and group names for a {name} pattern; any other pattern is already a regex
-std::pair<std::string, std::vector<std::string>> sCompileSegments(const std::string &pattern) {
-	const std::regex segment(R"(\{([A-Za-z_]\w*)\})");
-	std::string regex;
-	std::vector<std::string> names;
-	const auto appendLiteral = [&regex](std::string_view text) {
-		for (const char c : text) {
-			if (std::string_view(R"(\^$.|?*+()[]{})").contains(c))
-				regex += '\\';
-			regex += c;
-		}
-	};
-
-	std::string_view rest = pattern;
-	for (auto it = std::sregex_iterator(pattern.begin(), pattern.end(), segment); it != std::sregex_iterator(); ++it) {
-		appendLiteral(it->prefix().str());
-		regex += "([^/]+)";
-		names.push_back((*it)[1].str());
-		rest = std::string_view(pattern).substr(it->position() + it->length());
-	}
-
-	if (names.empty())
-		return { pattern, {} };
-	appendLiteral(rest);
-	return { std::move(regex), std::move(names) };
-}
-
 } // namespace
 
 namespace ou::http {
 
-Server::Server(Config config) : config_(std::move(config)), staticFiles_(std::bind_front(&Server::handleStaticFileRequest, this)) {
+Server::Server(Config config, Router router) : config_(std::move(config)), router_(std::move(router)) {
+	if (!router_.hasFallback())
+		router_.fallback(std::bind_front(&Server::handleStaticFileRequest, this));
+
 	std::error_code ec;
 	servingRoot_ = std::filesystem::weakly_canonical(config_.servingDirectory, ec);
 	if (!ec && config_.preloadBytes > 0)
@@ -271,73 +247,6 @@ void Server::stop() {
 	logInfo("Server stopped");
 }
 
-void Server::addMiddleware(std::shared_ptr<Middleware> middleware) { middlewares_.push_back(std::move(middleware)); }
-
-void Server::registerPathHandler(Method method, const std::string &path, AnyHandler handler) {
-	pathHandlers_[{ method, path }] = std::move(handler.handler);
-}
-
-void Server::registerPatternHandler(Method method, const std::string &pattern, AnyHandler handler) {
-	auto [regex, names] = sCompileSegments(pattern);
-	patternHandlers_.push_back(
-			{ .method = method, .pattern = std::regex(regex), .names = std::move(names), .handler = std::move(handler.handler) });
-}
-
-void Server::registerPathHandler(std::initializer_list<Method> methods, const std::string &path, const AnyHandler &handler) {
-	for (const Method method : methods) {
-		registerPathHandler(method, path, handler.handler);
-	}
-}
-
-void Server::registerPatternHandler(std::initializer_list<Method> methods, const std::string &pattern, const AnyHandler &handler) {
-	for (const Method method : methods) {
-		registerPatternHandler(method, pattern, handler.handler);
-	}
-}
-
-Task<Response> Server::handle(Request &request) const {
-	for (const auto &middleware : middlewares_) {
-		if (std::optional<Response> response = middleware->process(request))
-			return std::move(*response);
-	}
-
-	return handlerFor(request)(request);
-}
-
-const Server::Handler &Server::handlerFor(Request &request) const {
-	if (const auto path = pathHandlers_.find({ request.method, request.path }); path != pathHandlers_.end())
-		return path->second;
-
-	std::smatch match;
-	for (const PatternRoute &pattern : patternHandlers_) {
-		if (pattern.method != request.method || !std::regex_match(request.path, match, pattern.pattern))
-			continue;
-
-		for (size_t i = 0; i < match.size(); ++i)
-			request.pathParams.emplace_back(match.position(i), match.length(i));
-		request.pathParamNames = pattern.names;
-		return pattern.handler;
-	}
-
-	return staticFiles_;
-}
-
-Response Server::postProcess(const Request &request, Response response) const {
-	for (const auto &middleware : middlewares_) {
-		middleware->postProcess(request, response);
-	}
-
-	if (request.method == Method::HEAD)
-		response.body.clear();
-
-	return response;
-}
-
-Response Server::handleRequest(Request request) const {
-	Task<Response> handled = handle(request);
-	return postProcess(request, handled.result());
-}
-
 Task<Response> Server::serve(Request &request, const sockaddr_in &clientAddr) const {
 	request.clientAddr = clientAddr;
 
@@ -346,14 +255,13 @@ Task<Response> Server::serve(Request &request, const sockaddr_in &clientAddr) co
 	std::string logLine
 			= config_.logRequests ? std::format("{} {} from {}", request.method, request.path, addressToString(clientAddr)) : std::string();
 
-	Task<Response> handled = handle(request);
+	Task<Response> handled = router_.handle(request);
 	if (handled.done())
-		return finalize(request, handled.result(), keepAlive, logLine);
-	return finalizeLater(std::move(handled), request, keepAlive, std::move(logLine));
+		return finalize(handled.result(), keepAlive, logLine);
+	return finalizeLater(std::move(handled), keepAlive, std::move(logLine));
 }
 
-Response Server::finalize(const Request &request, Response response, bool keepAlive, std::string_view logLine) const {
-	response = postProcess(request, std::move(response));
+Response Server::finalize(Response response, bool keepAlive, std::string_view logLine) const {
 	response.keepAlive = keepAlive;
 
 	if (config_.logRequests)
@@ -361,9 +269,9 @@ Response Server::finalize(const Request &request, Response response, bool keepAl
 	return response;
 }
 
-Task<Response> Server::finalizeLater(Task<Response> handled, const Request &request, bool keepAlive, std::string logLine) const {
+Task<Response> Server::finalizeLater(Task<Response> handled, bool keepAlive, std::string logLine) const {
 	Response response = co_await handled;
-	co_return finalize(request, std::move(response), keepAlive, logLine);
+	co_return finalize(std::move(response), keepAlive, logLine);
 }
 
 Response Server::rejectRequest(int status, const sockaddr_in &clientAddr) const {
@@ -372,12 +280,7 @@ Response Server::rejectRequest(int status, const sockaddr_in &clientAddr) const 
 	Request request;
 	request.clientAddr = clientAddr;
 
-	Response response = Response::error(status);
-	for (const auto &middleware : middlewares_) {
-		middleware->postProcess(request, response);
-	}
-
-	return response;
+	return router_.postProcess(request, Response::error(status));
 }
 
 std::expected<std::string, int> Server::resolveTarget(const std::string &requestPath) const {

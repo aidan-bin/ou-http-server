@@ -149,8 +149,9 @@ BOOST_DATA_TEST_CASE(test_keep_alive_can_be_disabled, bdata::make(kModels), mode
 BOOST_DATA_TEST_CASE(test_rejection_is_logged, bdata::make(kModels), model) {
 	const std::filesystem::path logPath = root.path() / "access.log";
 
-	Server server(config(model));
-	server.addMiddleware(std::make_shared<AccessLog>(AccessLog::Config{ .path = logPath, .flushBytes = 0 }));
+	Router router;
+	router.layer(std::make_shared<AccessLog>(AccessLog::Config{ .path = logPath, .flushBytes = 0 }));
+	Server server(config(model), router);
 	BOOST_REQUIRE(server.start());
 
 	BOOST_CHECK(roundTrip(server.port(), "BOGUS / HTTP/1.1\r\nHost: x\r\n\r\n").starts_with("HTTP/1.1 400"));

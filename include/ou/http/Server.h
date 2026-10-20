@@ -1,8 +1,7 @@
 #pragma once
 
-#include "ou/http/Extractors.h"
 #include "ou/http/HttpTypes.h"
-#include "ou/http/Middleware.h"
+#include "ou/http/Router.h"
 #include "ou/http/Task.h"
 
 #include <chrono>
@@ -13,9 +12,7 @@
 #include <format>
 #include <functional>
 #include <initializer_list>
-#include <map>
 #include <memory>
-#include <regex>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -31,22 +28,6 @@ class Transport;
 
 class Server {
 public:
-	// Function or coroutine that handles a request and returns a response
-	using Handler = std::function<Task<Response>(const Request &)>;
-
-	// A Handler, or a lambda taking Extractors (wrapped by extracting())
-	struct AnyHandler {
-		template <typename F>
-		AnyHandler(F handler) { // NOLINT(*-explicit-*) converts at the call site by design
-			if constexpr (std::convertible_to<F, Handler>)
-				this->handler = std::move(handler);
-			else
-				this->handler = extracting(std::move(handler));
-		}
-
-		Handler handler;
-	};
-
 	enum class Model : uint8_t { ThreadPerCore, EventLoop };
 
 	struct TlsConfig {
@@ -95,7 +76,7 @@ public:
 		}
 	};
 
-	explicit Server(Config config);
+	explicit Server(Config config, Router router = {});
 	Server(const Server &) = delete;
 	Server &operator=(const Server &) = delete;
 	Server(Server &&) = delete;
@@ -108,31 +89,10 @@ public:
 	// The bound port; valid after start()
 	[[nodiscard]] uint16_t port() const noexcept { return port_; }
 
-	void addMiddleware(std::shared_ptr<Middleware> middleware);
-
-	// Re-registering an exact path replaces its handler; patterns accumulate and the first match wins.
-	// A pattern with {name} segments matches its other text literally; one without is a regex.
-	void registerPathHandler(Method method, const std::string &path, AnyHandler handler);
-	void registerPatternHandler(Method method, const std::string &pattern, AnyHandler handler);
-	void registerPathHandler(std::initializer_list<Method> methods, const std::string &path, const AnyHandler &handler);
-	void registerPatternHandler(std::initializer_list<Method> methods, const std::string &pattern, const AnyHandler &handler);
-
 protected:
-	// Taken by value: middlewares mutate the request, and later stages read the mutated copy
-	[[nodiscard]] Response handleRequest(Request request) const;
 	[[nodiscard]] Response handleStaticFileRequest(const Request &request) const;
 
-	// Logs and runs middleware postProcess on a request that never parsed
-	[[nodiscard]] Response rejectRequest(int status, const sockaddr_in &clientAddr) const;
-
 private:
-	struct PatternRoute {
-		Method method = Method::GET;
-		std::regex pattern;
-		std::vector<std::string> names;
-		Handler handler;
-	};
-
 	struct PreloadedFile {
 		std::string body;
 		std::string_view contentType;
@@ -140,23 +100,17 @@ private:
 
 	void preload();
 
-	// Runs middlewares, then the matching handler; may finish later if the handler suspends
-	[[nodiscard]] Task<Response> handle(Request &request) const;
+	// Logs and runs the layers' postProcess on a request that never parsed
+	[[nodiscard]] Response rejectRequest(int status, const sockaddr_in &clientAddr) const;
 
-	// Exact path, then pattern, then static files; stores pattern captures in request
-	[[nodiscard]] const Handler &handlerFor(Request &request) const;
-
-	// Runs every middleware's postProcess; drops the body for HEAD
-	[[nodiscard]] Response postProcess(const Request &request, Response response) const;
-
-	// Handles a request for a loop, then post-processes and finalizes it; request must outlive the task
+	// Routes a request for a loop, then finalizes the response; request must outlive the task
 	[[nodiscard]] Task<Response> serve(Request &request, const sockaddr_in &clientAddr) const;
 
-	// Post-processes a handled response and adds keep-alive and the log line
-	[[nodiscard]] Response finalize(const Request &request, Response response, bool keepAlive, std::string_view logLine) const;
+	// Adds keep-alive and the log line to a routed response
+	[[nodiscard]] Response finalize(Response response, bool keepAlive, std::string_view logLine) const;
 
-	// Finalizes a handler that suspended, once it returns; request must outlive the task
-	[[nodiscard]] Task<Response> finalizeLater(Task<Response> handled, const Request &request, bool keepAlive, std::string logLine) const;
+	// Finalizes a handler that suspended, once it returns
+	[[nodiscard]] Task<Response> finalizeLater(Task<Response> handled, bool keepAlive, std::string logLine) const;
 
 	// Maps a request path to a file under the serving root; fails with 404, or 403 (logged) outside the root
 	[[nodiscard]] std::expected<std::string, int> resolveTarget(const std::string &requestPath) const;
@@ -166,11 +120,7 @@ private:
 	std::unordered_map<std::string, PreloadedFile> preloaded_;
 	uint16_t port_ = 0;
 
-	// Exact paths are looked up; patterns are tried in registration order
-	std::map<std::pair<Method, std::string>, Handler> pathHandlers_;
-	std::vector<PatternRoute> patternHandlers_;
-	Handler staticFiles_;
-	std::vector<std::shared_ptr<Middleware>> middlewares_;
+	Router router_;
 
 	std::unique_ptr<Transport> transport_; // Set while started
 };

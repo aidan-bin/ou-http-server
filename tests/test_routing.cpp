@@ -29,7 +29,7 @@ public:
 };
 
 struct RoutingFixture {
-	TestServer server{ makeConfig(".") };
+	Router router;
 };
 
 } // namespace
@@ -37,45 +37,52 @@ struct RoutingFixture {
 BOOST_FIXTURE_TEST_SUITE(routing, RoutingFixture)
 
 BOOST_AUTO_TEST_CASE(test_custom_handler_and_middleware) {
-	server.addMiddleware(std::make_shared<TestMiddleware>());
-	server.registerPathHandler(Method::GET, "/test", [](const Request &) { return Response::plainText(200, "Handled by TestHandler"); });
-	server.registerPatternHandler(Method::GET, R"(/pattern/\d+)",
-																[](const Request &) { return Response::plainText(200, "Pattern handler"); });
+	router.layer(std::make_shared<TestMiddleware>());
+	router.route(Method::GET, "/test", [](const Request &) { return Response::plainText(200, "Handled by TestHandler"); });
+	router.pattern(Method::GET, R"(/pattern/\d+)", [](const Request &) { return Response::plainText(200, "Pattern handler"); });
 
-	BOOST_CHECK_EQUAL(server.handleRequest(makeRequest("/test")).body, "Handled by TestHandler");
-	BOOST_CHECK_EQUAL(server.handleRequest(makeRequest("/middleware")).body, "Intercepted by Middleware");
-	BOOST_CHECK_EQUAL(server.handleRequest(makeRequest("/pattern/123")).body, "Pattern handler");
-	BOOST_CHECK_EQUAL(server.handleRequest(makeRequest("/unknown")).statusCode, 404);
+	BOOST_CHECK_EQUAL(respond(router, makeRequest("/test")).body, "Handled by TestHandler");
+	BOOST_CHECK_EQUAL(respond(router, makeRequest("/middleware")).body, "Intercepted by Middleware");
+	BOOST_CHECK_EQUAL(respond(router, makeRequest("/pattern/123")).body, "Pattern handler");
+	BOOST_CHECK_EQUAL(respond(router, makeRequest("/unknown")).statusCode, 404);
+}
+
+BOOST_AUTO_TEST_CASE(test_fallback_answers_unmatched_requests) {
+	router.route(Method::GET, "/known", [](const Request &) { return Response::plainText(200, "known"); })
+			.fallback([](const Request &request) { return Response::plainText(404, "no " + request.path); });
+
+	BOOST_CHECK_EQUAL(respond(router, makeRequest("/known")).body, "known");
+	BOOST_CHECK_EQUAL(respond(router, makeRequest("/other")).body, "no /other");
 }
 
 BOOST_AUTO_TEST_CASE(test_coroutine_handler_routes_like_any_other) {
-	server.addMiddleware(std::make_shared<TestMiddleware>());
+	router.layer(std::make_shared<TestMiddleware>());
 	const auto napping = [](const Request &) -> Task<Response> {
 		co_await sleepFor(std::chrono::milliseconds(1));
 		co_return Response::plainText(200, "rested");
 	};
-	server.registerPathHandler({ Method::GET, Method::HEAD }, "/nap", napping);
-	server.registerPatternHandler(Method::GET, R"(/nap/\d+)", napping);
-	server.registerPathHandler(Method::GET, "/middleware", napping);
+	router.route({ Method::GET, Method::HEAD }, "/nap", napping);
+	router.pattern(Method::GET, R"(/nap/\d+)", napping);
+	router.route(Method::GET, "/middleware", napping);
 
-	BOOST_CHECK_EQUAL(server.handleRequest(makeRequest("/nap")).body, "rested");
-	BOOST_CHECK_EQUAL(server.handleRequest(makeRequest("/nap/7")).body, "rested");
-	BOOST_CHECK(server.handleRequest(makeRequest("/nap", Method::HEAD)).body.empty());
-	BOOST_CHECK_EQUAL(server.handleRequest(makeRequest("/middleware")).body, "Intercepted by Middleware");
+	BOOST_CHECK_EQUAL(respond(router, makeRequest("/nap")).body, "rested");
+	BOOST_CHECK_EQUAL(respond(router, makeRequest("/nap/7")).body, "rested");
+	BOOST_CHECK(respond(router, makeRequest("/nap", Method::HEAD)).body.empty());
+	BOOST_CHECK_EQUAL(respond(router, makeRequest("/middleware")).body, "Intercepted by Middleware");
 }
 
 BOOST_AUTO_TEST_CASE(test_multi_method_registration) {
 	const auto echoMethod = [](const Request &req) {
 		return Response::plainText(200, std::string(methodToString(req.method)));
 	};
-	server.registerPathHandler({ Method::GET, Method::PUT }, "/multi", echoMethod);
-	server.registerPatternHandler({ Method::GET, Method::DELETE }, R"(/multi/\d+)", echoMethod);
+	router.route({ Method::GET, Method::PUT }, "/multi", echoMethod);
+	router.pattern({ Method::GET, Method::DELETE }, R"(/multi/\d+)", echoMethod);
 
-	BOOST_CHECK_EQUAL(server.handleRequest(makeRequest("/multi", Method::GET)).body, "GET");
-	BOOST_CHECK_EQUAL(server.handleRequest(makeRequest("/multi", Method::PUT)).body, "PUT");
-	BOOST_CHECK_EQUAL(server.handleRequest(makeRequest("/multi", Method::POST)).statusCode, 404);
-	BOOST_CHECK_EQUAL(server.handleRequest(makeRequest("/multi/1", Method::DELETE)).body, "DELETE");
-	BOOST_CHECK_EQUAL(server.handleRequest(makeRequest("/multi/1", Method::PUT)).statusCode, 404);
+	BOOST_CHECK_EQUAL(respond(router, makeRequest("/multi", Method::GET)).body, "GET");
+	BOOST_CHECK_EQUAL(respond(router, makeRequest("/multi", Method::PUT)).body, "PUT");
+	BOOST_CHECK_EQUAL(respond(router, makeRequest("/multi", Method::POST)).statusCode, 404);
+	BOOST_CHECK_EQUAL(respond(router, makeRequest("/multi/1", Method::DELETE)).body, "DELETE");
+	BOOST_CHECK_EQUAL(respond(router, makeRequest("/multi/1", Method::PUT)).statusCode, 404);
 }
 
 BOOST_AUTO_TEST_CASE(test_query_extractor) {
@@ -94,38 +101,36 @@ BOOST_AUTO_TEST_CASE(test_query_extractor) {
 }
 
 BOOST_AUTO_TEST_CASE(test_pattern_captures) {
-	server.registerPatternHandler(Method::GET, R"(/users/(\w+)/posts/(\d+)?)", [](const Request &request) {
+	router.pattern(Method::GET, R"(/users/(\w+)/posts/(\d+)?)", [](const Request &request) {
 		return Response::plainText(200, std::format("{}|{}|{}", request.pathParam(1).value_or("-"), request.pathParam(2).value_or("-"),
 																								request.pathParam(3).value_or("-")));
 	});
-	server.registerPatternHandler(Method::GET, R"(/id/(\w+))",
-																[](Path<1, int> id) { return Response::plainText(200, std::to_string(id.value)); });
+	router.pattern(Method::GET, R"(/id/(\w+))", [](Path<1, int> id) { return Response::plainText(200, std::to_string(id.value)); });
 
-	BOOST_CHECK_EQUAL(server.handleRequest(makeRequest("/users/ann/posts/7")).body, "ann|7|-");
-	BOOST_CHECK_EQUAL(server.handleRequest(makeRequest("/users/ann/posts/")).body, "ann||-"); // Unmatched group is empty
-	BOOST_CHECK_EQUAL(server.handleRequest(makeRequest("/id/42")).body, "42");
-	BOOST_CHECK_EQUAL(server.handleRequest(makeRequest("/id/abc")).body, "Bad path parameter 1");
+	BOOST_CHECK_EQUAL(respond(router, makeRequest("/users/ann/posts/7")).body, "ann|7|-");
+	BOOST_CHECK_EQUAL(respond(router, makeRequest("/users/ann/posts/")).body, "ann||-"); // Unmatched group is empty
+	BOOST_CHECK_EQUAL(respond(router, makeRequest("/id/42")).body, "42");
+	BOOST_CHECK_EQUAL(respond(router, makeRequest("/id/abc")).body, "Bad path parameter 1");
 }
 
 BOOST_AUTO_TEST_CASE(test_named_segments) {
-	server.registerPatternHandler(Method::GET, "/users/{user}/posts/{id}.json", [](Path<"user"> user, Path<"id", int> id) {
+	router.pattern(Method::GET, "/users/{user}/posts/{id}.json", [](Path<"user"> user, Path<"id", int> id) {
 		return Response::plainText(200, std::format("{} {}", user.value, id.value));
 	});
-	server.registerPatternHandler(Method::GET, "/raw/{n}",
-																[](Path<1> n, Path<"missing"> missing) { return Response::plainText(200, n.value + missing.value); });
+	router.pattern(Method::GET, "/raw/{n}",
+								 [](Path<1> n, Path<"missing"> missing) { return Response::plainText(200, n.value + missing.value); });
 
-	BOOST_CHECK_EQUAL(server.handleRequest(makeRequest("/users/ann/posts/7.json")).body, "ann 7");
-	BOOST_CHECK_EQUAL(server.handleRequest(makeRequest("/users/ann/posts/x.json")).body, "Bad path parameter id");
-	BOOST_CHECK_EQUAL(server.handleRequest(makeRequest("/users/ann/posts/7xjson")).statusCode, 404); // "." is literal
-	BOOST_CHECK_EQUAL(server.handleRequest(makeRequest("/users/a/b/posts/7.json")).statusCode, 404); // A segment has no "/"
-	BOOST_CHECK_EQUAL(server.handleRequest(makeRequest("/raw/1")).body, "Bad path parameter missing");
+	BOOST_CHECK_EQUAL(respond(router, makeRequest("/users/ann/posts/7.json")).body, "ann 7");
+	BOOST_CHECK_EQUAL(respond(router, makeRequest("/users/ann/posts/x.json")).body, "Bad path parameter id");
+	BOOST_CHECK_EQUAL(respond(router, makeRequest("/users/ann/posts/7xjson")).statusCode, 404); // "." is literal
+	BOOST_CHECK_EQUAL(respond(router, makeRequest("/users/a/b/posts/7.json")).statusCode, 404); // A segment has no "/"
+	BOOST_CHECK_EQUAL(respond(router, makeRequest("/raw/1")).body, "Bad path parameter missing");
 }
 
 BOOST_AUTO_TEST_CASE(test_extracting_handler) {
-	server.registerPathHandler(Method::GET, "/add", [](Query<"a", int> a, Query<"b", int> b) {
-		return Response::plainText(200, std::to_string(a.value + b.value));
-	});
-	server.registerPathHandler({ Method::GET, Method::PUT }, "/echo", [](const Request &request, Query<"name"> name) -> Task<Response> {
+	router.route(Method::GET, "/add",
+							 [](Query<"a", int> a, Query<"b", int> b) { return Response::plainText(200, std::to_string(a.value + b.value)); });
+	router.route({ Method::GET, Method::PUT }, "/echo", [](const Request &request, Query<"name"> name) -> Task<Response> {
 		co_await sleepFor(std::chrono::milliseconds(1));
 		co_return Response::plainText(200, std::format("{} {}", request.method, name.value));
 	});
@@ -133,7 +138,7 @@ BOOST_AUTO_TEST_CASE(test_extracting_handler) {
 	const auto call = [&](std::string_view path, std::string_view query, Method method = Method::GET) {
 		Request request = makeRequest(std::string(path), method);
 		request.query = query;
-		return server.handleRequest(request);
+		return respond(router, request);
 	};
 
 	BOOST_CHECK_EQUAL(call("/add", "a=2&b=3").body, "5");
@@ -142,20 +147,19 @@ BOOST_AUTO_TEST_CASE(test_extracting_handler) {
 	BOOST_CHECK_EQUAL(call("/echo", "name=ou", Method::PUT).body, "PUT ou");
 	BOOST_CHECK_EQUAL(call("/echo", "").statusCode, 400);
 
-	server.registerPatternHandler(Method::GET, R"(/scaled/(\d+))", [](Path<1, int> n, Query<"by", int> by) {
-		return Response::plainText(200, std::to_string(n.value * by.value));
-	});
+	router.pattern(Method::GET, R"(/scaled/(\d+))",
+								 [](Path<1, int> n, Query<"by", int> by) { return Response::plainText(200, std::to_string(n.value * by.value)); });
 	BOOST_CHECK_EQUAL(call("/scaled/3", "by=4").body, "12");
 	BOOST_CHECK_EQUAL(call("/scaled/3", "").statusCode, 400);
 
-	server.registerPathHandler(Method::GET, "/agent", [](Header<"user-agent"> agent, Header<"X-Count", int> count) {
+	router.route(Method::GET, "/agent", [](Header<"user-agent"> agent, Header<"X-Count", int> count) {
 		return Response::plainText(200, std::format("{} {}", agent.value, count.value));
 	});
 	Request request = makeRequest("/agent");
 	request.headers = { { "User-Agent", "ou" }, { "X-Count", "3" } };
-	BOOST_CHECK_EQUAL(server.handleRequest(request).body, "ou 3");
+	BOOST_CHECK_EQUAL(respond(router, request).body, "ou 3");
 	request.headers.pop_back();
-	BOOST_CHECK_EQUAL(server.handleRequest(request).body, "Missing or bad X-Count header");
+	BOOST_CHECK_EQUAL(respond(router, request).body, "Missing or bad X-Count header");
 }
 
 BOOST_AUTO_TEST_CASE(test_kv_store_methods) {

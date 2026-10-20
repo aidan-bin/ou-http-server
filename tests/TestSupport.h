@@ -30,7 +30,9 @@ namespace ou::test {
 using http::Method;
 using http::Request;
 using http::Response;
+using http::Router;
 using http::Server;
+using http::Task;
 
 inline constexpr std::array kModels{ Server::Model::ThreadPerCore, Server::Model::EventLoop };
 
@@ -99,13 +101,18 @@ inline Server::Config makeConfig(const std::filesystem::path &root, Server::Mode
 	return config;
 }
 
-// Exposes routing for socket-free tests
+// Exposes static file serving for socket-free tests
 class TestServer : public Server {
 public:
-	using Server::handleRequest;
 	using Server::handleStaticFileRequest;
 	using Server::Server;
 };
+
+// Runs a request through a router without sockets
+inline Response respond(const Router &router, Request request) {
+	Task<Response> handled = router.handle(request);
+	return handled.result();
+}
 
 struct ServingRoot {
 	TempDir root;

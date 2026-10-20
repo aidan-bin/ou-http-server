@@ -37,15 +37,16 @@ Task<Response> sSlowWork(const Request & /*request*/) {
 Response sFast(const Request & /*request*/) { return Response::plainText(200, "fast"); }
 
 void sCheckThrowingHandlerCloses(const Server::Config &config) {
-	Server server(config);
-	server.registerPathHandler(Method::GET, "/throw", [](const Request &) -> Response { throw std::runtime_error("handler failed"); });
-	server.registerPathHandler(Method::GET, "/throw-after-sleep", [](const Request &) -> Task<Response> {
+	Router router;
+	router.route(Method::GET, "/throw", [](const Request &) -> Response { throw std::runtime_error("handler failed"); });
+	router.route(Method::GET, "/throw-after-sleep", [](const Request &) -> Task<Response> {
 		co_await sleepFor(std::chrono::milliseconds(10));
 		throw std::runtime_error("handler failed");
 	});
-	server.registerPathHandler(Method::GET, "/throw-offloaded", [](const Request &) -> Task<Response> {
+	router.route(Method::GET, "/throw-offloaded", [](const Request &) -> Task<Response> {
 		co_return co_await offload([]() -> Response { throw std::runtime_error("work failed"); });
 	});
+	Server server(config, router);
 	BOOST_REQUIRE(server.start());
 
 	for (const std::string_view path : { "/throw", "/throw-after-sleep", "/throw-offloaded" }) {
@@ -71,12 +72,12 @@ BOOST_AUTO_TEST_CASE(test_handler_pool_exception_closes_connection) {
 BOOST_AUTO_TEST_CASE(test_offload_works_after_restart) {
 	Server::Config pooled = config(Server::Model::EventLoop);
 	pooled.handlerThreads = 1;
-	Server server(pooled);
-	server.registerPathHandler(Method::GET, "/work", [](const Request &) -> Task<Response> {
-		co_return co_await offload([] { return Response::plainText(200, "done"); });
-	});
+	Router router;
+	router.route(Method::GET, "/work",
+							 [](const Request &) -> Task<Response> { co_return co_await offload([] { return Response::plainText(200, "done"); }); });
 
 	for (int run = 0; run < 2; ++run) {
+		Server server(pooled, router);
 		BOOST_REQUIRE(server.start());
 		const std::string response = roundTrip(server.port(), "GET /work HTTP/1.1\r\nHost: x\r\n\r\n");
 		BOOST_CHECK(response.ends_with("done"));
@@ -85,8 +86,9 @@ BOOST_AUTO_TEST_CASE(test_offload_works_after_restart) {
 }
 
 BOOST_DATA_TEST_CASE(test_coroutine_handler_round_trip, bdata::make(kModels), model) {
-	Server server(config(model));
-	server.registerPathHandler(Method::GET, "/nap", sNap);
+	Router router;
+	router.route(Method::GET, "/nap", sNap);
+	Server server(config(model), router);
 	BOOST_REQUIRE(server.start());
 
 	const std::string response = roundTrip(server.port(), "GET /nap HTTP/1.1\r\nHost: x\r\n\r\n");
@@ -97,8 +99,9 @@ BOOST_DATA_TEST_CASE(test_coroutine_handler_round_trip, bdata::make(kModels), mo
 BOOST_AUTO_TEST_CASE(test_event_loop_sleeps_without_holding_its_thread) {
 	Server::Config single = config(Server::Model::EventLoop);
 	single.threadCount = 1;
-	Server server(single);
-	server.registerPathHandler(Method::GET, "/nap", sNap);
+	Router router;
+	router.route(Method::GET, "/nap", sNap);
+	Server server(single, router);
 	BOOST_REQUIRE(server.start());
 
 	std::vector<Client> clients;
@@ -117,9 +120,10 @@ BOOST_AUTO_TEST_CASE(test_event_loop_sleeps_without_holding_its_thread) {
 BOOST_AUTO_TEST_CASE(test_event_loop_drops_a_sleep_whose_client_left) {
 	Server::Config single = config(Server::Model::EventLoop);
 	single.threadCount = 1;
-	Server server(single);
-	server.registerPathHandler(Method::GET, "/nap", sNap);
-	server.registerPathHandler(Method::GET, "/fast", sFast);
+	Router router;
+	router.route(Method::GET, "/nap", sNap);
+	router.route(Method::GET, "/fast", sFast);
+	Server server(single, router);
 	BOOST_REQUIRE(server.start());
 
 	Client(server.port()).send("GET /nap HTTP/1.1\r\nHost: x\r\n\r\n");
@@ -134,9 +138,10 @@ BOOST_AUTO_TEST_CASE(test_handler_pool_keeps_slow_work_off_the_loop) {
 	Server::Config pooled = config(Server::Model::EventLoop);
 	pooled.handlerThreads = 2;
 	pooled.threadCount = 1;
-	Server server(pooled);
-	server.registerPathHandler(Method::GET, "/slow", sSlowWork);
-	server.registerPathHandler(Method::GET, "/fast", sFast);
+	Router router;
+	router.route(Method::GET, "/slow", sSlowWork);
+	router.route(Method::GET, "/fast", sFast);
+	Server server(pooled, router);
 	BOOST_REQUIRE(server.start());
 
 	const Client slow(server.port());
@@ -153,8 +158,9 @@ BOOST_AUTO_TEST_CASE(test_handler_pool_keeps_slow_work_off_the_loop) {
 BOOST_AUTO_TEST_CASE(test_handler_pool_stop_discards_queued_jobs) {
 	Server::Config pooled = config(Server::Model::EventLoop);
 	pooled.handlerThreads = 1;
-	Server server(pooled);
-	server.registerPathHandler(Method::GET, "/slow", sSlowWork);
+	Router router;
+	router.route(Method::GET, "/slow", sSlowWork);
+	Server server(pooled, router);
 	BOOST_REQUIRE(server.start());
 
 	const Client running(server.port());

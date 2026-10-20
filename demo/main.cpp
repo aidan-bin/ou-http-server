@@ -4,6 +4,7 @@
 #include "ou/http/AccessLog.h"
 #include "ou/http/Awaitables.h"
 #include "ou/http/Logging.h"
+#include "ou/http/Router.h"
 #include "ou/http/Server.h"
 
 #include <algorithm>
@@ -53,31 +54,30 @@ int runServer(const auto &hasFlag, const auto &numberFlag) {
 	config.handlerThreads = numberFlag("--handler-threads=");
 	config.https = { .enabled = !hasFlag("--no-tls"), .certPath = "./example/certs/cert.pem", .keyPath = "./example/certs/key.pem" };
 
-	Server server(config);
+	Router router;
 
 	if (!hasFlag("--no-access-log")) {
 		const AccessLog::Config accessLogConfig = { .path = "access.log" };
-		server.addMiddleware(std::make_shared<AccessLog>(accessLogConfig));
+		router.layer(std::make_shared<AccessLog>(accessLogConfig));
 	}
 
 	if (hasFlag("--read-only"))
-		server.addMiddleware(std::make_shared<ReadOnly>());
+		router.layer(std::make_shared<ReadOnly>());
 
 	const auto kvStore = std::make_shared<KVStore>();
-	server.registerPathHandler({ Method::GET, Method::PUT, Method::DELETE }, "/kv",
-														 [kvStore](const Request &request, Query<"key"> key) { return kvStore->handle(request, key.value); });
-	server.registerPatternHandler({ Method::GET, Method::PUT, Method::DELETE }, "/kv/{key}",
-																[kvStore](const Request &request, Path<"key"> key) { return kvStore->handle(request, key.value); });
+	router.route({ Method::GET, Method::PUT, Method::DELETE }, "/kv",
+							 [kvStore](const Request &request, Query<"key"> key) { return kvStore->handle(request, key.value); });
+	router.pattern({ Method::GET, Method::PUT, Method::DELETE }, "/kv/{key}",
+								 [kvStore](const Request &request, Path<"key"> key) { return kvStore->handle(request, key.value); });
 
-	server.registerPathHandler(Method::GET, "/whoami",
-														 [](Header<"User-Agent"> agent) { return Response::plainText(200, std::move(agent.value)); });
+	router.route(Method::GET, "/whoami", [](Header<"User-Agent"> agent) { return Response::plainText(200, std::move(agent.value)); });
 
-	server.registerPathHandler(Method::GET, "/sleep", [](Query<"ms", int> ms) -> Task<Response> {
+	router.route(Method::GET, "/sleep", [](Query<"ms", int> ms) -> Task<Response> {
 		co_await ou::http::sleepFor(sDemoDuration(ms.value));
 		co_return Response::plainText(200, "OK");
 	});
 
-	server.registerPathHandler(Method::GET, "/work", [](Query<"ms", int> ms) -> Task<Response> {
+	router.route(Method::GET, "/work", [](Query<"ms", int> ms) -> Task<Response> {
 		co_return co_await ou::http::offload([deadline = std::chrono::steady_clock::now() + sDemoDuration(ms.value)] {
 			while (std::chrono::steady_clock::now() < deadline) {
 			}
@@ -85,6 +85,7 @@ int runServer(const auto &hasFlag, const auto &numberFlag) {
 		});
 	});
 
+	Server server(config, router);
 	if (const auto started = server.start(); !started) {
 		ou::logError("Server failed to start: {}", started.error().message());
 		return EXIT_FAILURE;

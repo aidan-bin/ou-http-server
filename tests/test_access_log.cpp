@@ -97,13 +97,13 @@ BOOST_AUTO_TEST_CASE(test_access_log_concurrent_writes) {
 }
 
 BOOST_AUTO_TEST_CASE(test_access_log_records_routed_status) {
-	TestServer server(makeConfig("."));
-	server.addMiddleware(std::make_shared<AccessLog>(AccessLog::Config{ .path = logPath, .flushBytes = 0 }));
-	server.registerPathHandler({ Method::GET, Method::HEAD }, "/hello", [](const Request &) { return Response::plainText(200, "hi there"); });
+	Router router;
+	router.layer(std::make_shared<AccessLog>(AccessLog::Config{ .path = logPath, .flushBytes = 0 }));
+	router.route({ Method::GET, Method::HEAD }, "/hello", [](const Request &) { return Response::plainText(200, "hi there"); });
 
-	BOOST_CHECK_EQUAL(server.handleRequest(makeRequest("/hello")).body, "hi there");
-	BOOST_CHECK_EQUAL(server.handleRequest(makeRequest("/does-not-exist")).statusCode, 404);
-	BOOST_CHECK(server.handleRequest(makeRequest("/hello", Method::HEAD)).body.empty());
+	BOOST_CHECK_EQUAL(respond(router, makeRequest("/hello")).body, "hi there");
+	BOOST_CHECK_EQUAL(respond(router, makeRequest("/does-not-exist")).statusCode, 404);
+	BOOST_CHECK(respond(router, makeRequest("/hello", Method::HEAD)).body.empty());
 
 	const std::vector<std::string> logged = lines(logPath);
 	BOOST_REQUIRE_EQUAL(logged.size(), 3U);
