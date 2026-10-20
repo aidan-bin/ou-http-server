@@ -59,7 +59,7 @@ Every build is a CMake preset and lands in `build/<preset>-<os>/`:
 ```
 cmake --workflow --preset default    # configure, build, test
 cmake --workflow --preset asan       # Debug + address,undefined (also ubsan, tsan)
-cmake --build --preset tidy          # clang-tidy over src/ and tests/
+cmake --build --preset tidy          # clang-tidy
 ```
 
 `fuzz/` holds a libFuzzer target that checks a property, not just crashes: a request parses the same whatever the read sizes. It needs LLVM clang, so build it in Docker:

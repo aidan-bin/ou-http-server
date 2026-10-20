@@ -1,8 +1,8 @@
-#include "Awaitables.h"
 #include "Client.h"
-#include "HttpTypes.h"
-#include "Server.h"
 #include "TestSupport.h"
+#include "ou/http/Awaitables.h"
+#include "ou/http/HttpTypes.h"
+#include "ou/http/Server.h"
 
 #include <boost/test/data/test_case.hpp>
 #include <boost/test/unit_test.hpp>
@@ -22,12 +22,12 @@ namespace {
 
 constexpr auto kSlowHandler = std::chrono::milliseconds(400);
 
-ou::Task<Response> sNap(const Request & /*request*/) {
+Task<Response> sNap(const Request & /*request*/) {
 	co_await sleepFor(kSlowHandler);
 	co_return Response::plainText(200, "rested");
 }
 
-ou::Task<Response> sSlowWork(const Request & /*request*/) {
+Task<Response> sSlowWork(const Request & /*request*/) {
 	co_return co_await offload([] {
 		std::this_thread::sleep_for(kSlowHandler);
 		return Response::plainText(200, "slow");
@@ -39,11 +39,11 @@ Response sFast(const Request & /*request*/) { return Response::plainText(200, "f
 void sCheckThrowingHandlerCloses(const Server::Config &config) {
 	Server server(config);
 	server.registerPathHandler(Method::GET, "/throw", [](const Request &) -> Response { throw std::runtime_error("handler failed"); });
-	server.registerPathHandler(Method::GET, "/throw-after-sleep", [](const Request &) -> ou::Task<Response> {
+	server.registerPathHandler(Method::GET, "/throw-after-sleep", [](const Request &) -> Task<Response> {
 		co_await sleepFor(std::chrono::milliseconds(10));
 		throw std::runtime_error("handler failed");
 	});
-	server.registerPathHandler(Method::GET, "/throw-offloaded", [](const Request &) -> ou::Task<Response> {
+	server.registerPathHandler(Method::GET, "/throw-offloaded", [](const Request &) -> Task<Response> {
 		co_return co_await offload([]() -> Response { throw std::runtime_error("work failed"); });
 	});
 	BOOST_REQUIRE(server.start());
@@ -65,6 +65,23 @@ BOOST_AUTO_TEST_CASE(test_handler_pool_exception_closes_connection) {
 	Server::Config pooled = config(Server::Model::EventLoop);
 	pooled.handlerThreads = 1;
 	sCheckThrowingHandlerCloses(pooled);
+}
+
+// The handler pool stops for good, so each start must get a fresh one
+BOOST_AUTO_TEST_CASE(test_offload_works_after_restart) {
+	Server::Config pooled = config(Server::Model::EventLoop);
+	pooled.handlerThreads = 1;
+	Server server(pooled);
+	server.registerPathHandler(Method::GET, "/work", [](const Request &) -> Task<Response> {
+		co_return co_await offload([] { return Response::plainText(200, "done"); });
+	});
+
+	for (int run = 0; run < 2; ++run) {
+		BOOST_REQUIRE(server.start());
+		const std::string response = roundTrip(server.port(), "GET /work HTTP/1.1\r\nHost: x\r\n\r\n");
+		BOOST_CHECK(response.ends_with("done"));
+		server.stop();
+	}
 }
 
 BOOST_DATA_TEST_CASE(test_coroutine_handler_round_trip, bdata::make(kModels), model) {

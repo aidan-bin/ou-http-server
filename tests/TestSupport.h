@@ -1,7 +1,7 @@
 #pragma once
 
-#include "HttpTypes.h"
-#include "Server.h"
+#include "ou/http/HttpTypes.h"
+#include "ou/http/Server.h"
 
 #include <arpa/inet.h>
 #include <array>

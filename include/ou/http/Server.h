@@ -1,13 +1,9 @@
 #pragma once
 
-#include "ConnectionLoop.h"
-#include "Extractors.h"
-#include "HandlerPool.h"
-#include "HttpTypes.h"
-#include "SSLSocketHandler.h"
-#include "SocketHandler.h"
-#include "Task.h"
-#include "UniqueFd.h"
+#include "ou/http/Extractors.h"
+#include "ou/http/HttpTypes.h"
+#include "ou/http/Middleware.h"
+#include "ou/http/Task.h"
 
 #include <chrono>
 #include <cstddef>
@@ -19,34 +15,19 @@
 #include <initializer_list>
 #include <map>
 #include <memory>
-#include <optional>
 #include <regex>
-#include <stop_token>
 #include <string>
 #include <string_view>
 #include <system_error>
-#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
+#include <netinet/in.h>
+
 namespace ou::http {
 
-class Middleware {
-public:
-	Middleware() = default;
-	Middleware(const Middleware &) = delete;
-	Middleware &operator=(const Middleware &) = delete;
-	Middleware(Middleware &&) = delete;
-	Middleware &operator=(Middleware &&) = delete;
-	virtual ~Middleware() = default;
-
-	// Runs before routing. Return a response to answer with it and skip routing; may modify `request`
-	virtual std::optional<Response> process(Request & /*request*/) { return std::nullopt; }
-
-	// Runs after every request (including short-circuited and rejected ones)
-	virtual void postProcess(const Request & /*request*/, const Response & /*response*/) {}
-};
+class Transport;
 
 class Server {
 public:
@@ -67,6 +48,12 @@ public:
 	};
 
 	enum class Model : uint8_t { ThreadPerCore, EventLoop };
+
+	struct TlsConfig {
+		bool enabled = false;
+		std::filesystem::path certPath;
+		std::filesystem::path keyPath;
+	};
 
 	struct Config {
 		std::filesystem::path servingDirectory;
@@ -96,7 +83,7 @@ public:
 		// One console line per routed request
 		bool logRequests = true;
 
-		SSLSocketHandler::Config https;
+		TlsConfig https;
 	};
 
 	struct StartError {
@@ -152,7 +139,6 @@ private:
 	};
 
 	void preload();
-	void runLoop(const std::stop_token &stop);
 
 	// Runs middlewares, then the matching handler; may finish later if the handler suspends
 	[[nodiscard]] Task<Response> handle(Request &request) const;
@@ -179,8 +165,6 @@ private:
 	std::filesystem::path servingRoot_;
 	std::unordered_map<std::string, PreloadedFile> preloaded_;
 	uint16_t port_ = 0;
-	std::vector<std::jthread> threads_;
-	UniqueFd listenSocket_; // Shared by every worker thread
 
 	// Exact paths are looked up; patterns are tried in registration order
 	std::map<std::pair<Method, std::string>, Handler> pathHandlers_;
@@ -188,8 +172,7 @@ private:
 	Handler staticFiles_;
 	std::vector<std::shared_ptr<Middleware>> middlewares_;
 
-	std::unique_ptr<SocketHandler> socketHandler_;
-	std::optional<HandlerPool> pool_;
+	std::unique_ptr<Transport> transport_; // Set while started
 };
 
 } // namespace ou::http

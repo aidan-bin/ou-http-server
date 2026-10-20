@@ -1,7 +1,7 @@
 #pragma once
 
-#include "HttpTypes.h"
-#include "Task.h"
+#include "ou/http/HttpTypes.h"
+#include "ou/http/Task.h"
 
 #include <algorithm>
 #include <array>

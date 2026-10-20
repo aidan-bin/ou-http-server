@@ -50,7 +50,7 @@ namespace {
 
 } // namespace
 
-SSLSocketHandler::SSLSocketHandler(const Config &config) : sslCtx_(SSL_CTX_new(TLS_server_method())) {
+SSLSocketHandler::SSLSocketHandler(const http::Server::TlsConfig &config) : sslCtx_(SSL_CTX_new(TLS_server_method())) {
 	if ((sslCtx_ == nullptr) || SSL_CTX_use_certificate_file(sslCtx_, config.certPath.c_str(), SSL_FILETYPE_PEM) <= 0
 			|| SSL_CTX_use_PrivateKey_file(sslCtx_, config.keyPath.c_str(), SSL_FILETYPE_PEM) <= 0) {
 		SSL_CTX_free(sslCtx_);

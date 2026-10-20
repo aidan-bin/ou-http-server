@@ -9,7 +9,8 @@ file(GLOB TEST_SUITE_SOURCES RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} CONFIGURE_DEPE
 list(REMOVE_ITEM TEST_SUITE_SOURCES test_main.cpp)
 
 add_executable(test_http test_main.cpp ${TEST_SUITE_SOURCES})
-target_link_libraries(test_http PRIVATE http_lib Boost::headers pthread)
+target_link_libraries(test_http PRIVATE demo_kvstore OpenSSL::SSL OpenSSL::Crypto Boost::headers)
+target_include_directories(test_http PRIVATE ${CMAKE_SOURCE_DIR}/src)
 
 target_compile_definitions(test_http PRIVATE TEST_CERT_DIR="${CMAKE_SOURCE_DIR}/example/certs")
 

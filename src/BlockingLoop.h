@@ -24,7 +24,7 @@ public:
 
 private:
 	// Empty on timeout or error. Polls rather than blocking in accept() so the worker notices stop() on
-	// its own; see Server::start
+	// its own; see ~Transport
 	[[nodiscard]] UniqueFd acceptOne(sockaddr_in &clientAddr) const;
 
 	// Never throws, and never closes the socket

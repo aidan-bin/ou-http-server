@@ -1,8 +1,8 @@
-#include "Awaitables.h"
-#include "Extractors.h"
-#include "HttpTypes.h"
 #include "KVStore.h"
 #include "TestSupport.h"
+#include "ou/http/Awaitables.h"
+#include "ou/http/Extractors.h"
+#include "ou/http/HttpTypes.h"
 
 #include <boost/test/unit_test.hpp>
 #include <chrono>
@@ -50,7 +50,7 @@ BOOST_AUTO_TEST_CASE(test_custom_handler_and_middleware) {
 
 BOOST_AUTO_TEST_CASE(test_coroutine_handler_routes_like_any_other) {
 	server.addMiddleware(std::make_shared<TestMiddleware>());
-	const auto napping = [](const Request &) -> ou::Task<Response> {
+	const auto napping = [](const Request &) -> Task<Response> {
 		co_await sleepFor(std::chrono::milliseconds(1));
 		co_return Response::plainText(200, "rested");
 	};
@@ -125,7 +125,7 @@ BOOST_AUTO_TEST_CASE(test_extracting_handler) {
 	server.registerPathHandler(Method::GET, "/add", [](Query<"a", int> a, Query<"b", int> b) {
 		return Response::plainText(200, std::to_string(a.value + b.value));
 	});
-	server.registerPathHandler({ Method::GET, Method::PUT }, "/echo", [](const Request &request, Query<"name"> name) -> ou::Task<Response> {
+	server.registerPathHandler({ Method::GET, Method::PUT }, "/echo", [](const Request &request, Query<"name"> name) -> Task<Response> {
 		co_await sleepFor(std::chrono::milliseconds(1));
 		co_return Response::plainText(200, std::format("{} {}", request.method, name.value));
 	});

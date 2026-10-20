@@ -1,8 +1,7 @@
-#include "Server.h"
-#include "BlockingLoop.h"
-#include "EventLoop.h"
-#include "Listener.h"
-#include "Logging.h"
+#include "ou/http/Server.h"
+#include "Transport.h"
+#include "UniqueFd.h"
+#include "ou/http/Logging.h"
 
 #include <algorithm>
 #include <array>
@@ -10,10 +9,12 @@
 #include <expected>
 #include <format>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <ranges>
 #include <span>
 #include <system_error>
+#include <thread>
 #include <utility>
 
 #include <fcntl.h>
@@ -165,8 +166,6 @@ std::string sGenerateDirectoryIndex(const std::string &requestPath, const std::f
 	return html;
 }
 
-ou::http::Server::StartError sStartError(const ou::SocketError &error) { return { .step = std::string(error.step), .code = error.code }; }
-
 // Regex and group names for a {name} pattern; any other pattern is already a regex
 std::pair<std::string, std::vector<std::string>> sCompileSegments(const std::string &pattern) {
 	const std::regex segment(R"(\{([A-Za-z_]\w*)\})");
@@ -251,44 +250,23 @@ std::expected<void, Server::StartError> Server::start() {
 																			 .code = ec ? ec : std::make_error_code(std::errc::not_a_directory) });
 	}
 
-	try {
-		if (config_.https.enabled)
-			socketHandler_ = std::make_unique<SSLSocketHandler>(config_.https);
-		else
-			socketHandler_ = std::make_unique<PlainSocketHandler>();
-	} catch (const std::exception &e) {
-		return std::unexpected(StartError{ .step = std::format("initialize socket handler: {}", e.what()), .code = {} });
-	}
+	auto transport = Transport::start(
+			config_, [this](Request &request, const sockaddr_in &clientAddr) { return serve(request, clientAddr); },
+			[this](int status, const sockaddr_in &clientAddr) { return rejectRequest(status, clientAddr); });
+	if (!transport)
+		return std::unexpected(std::move(transport).error());
 
-	std::expected<ou::Listener, StartError> listener = ou::openListener(config_.port).transform_error(sStartError);
-	if (!listener)
-		return std::unexpected(std::move(listener).error());
-
-	port_ = listener->port;
-	listenSocket_ = std::move(listener->socket);
-	logInfo("Server socket {} bound and listening on port {}...", listenSocket_.get(), port_);
-
-	if (config_.model == Model::EventLoop && config_.handlerThreads > 0)
-		pool_.emplace(config_.handlerThreads);
-
-	for (unsigned i = 0; i < config_.threadCount; ++i) {
-		threads_.emplace_back([this](const std::stop_token &stop) { runLoop(stop); });
-	}
+	transport_ = std::move(*transport);
+	port_ = transport_->port();
 	return {};
 }
 
 void Server::stop() {
-	if (!listenSocket_ && threads_.empty())
+	if (!transport_)
 		return;
 
 	logInfo("Stopping server...");
-
-	if (pool_)
-		pool_->stop();
-	for (std::jthread &thread : threads_)
-		thread.request_stop();
-	threads_.clear();
-	listenSocket_.reset();
+	transport_.reset();
 
 	logInfo("Server stopped");
 }
@@ -315,28 +293,6 @@ void Server::registerPatternHandler(std::initializer_list<Method> methods, const
 	for (const Method method : methods) {
 		registerPatternHandler(method, pattern, handler.handler);
 	}
-}
-
-void Server::runLoop(const std::stop_token &stop) {
-	const LoopConfig config{ .listenSocket = listenSocket_.get(),
-													 .maxRequestBytes = config_.maxRequestBytes,
-													 .idleTimeout = config_.readTimeout };
-
-	const Dispatch dispatch = [this](Request &request, const sockaddr_in &clientAddr) {
-		return serve(request, clientAddr);
-	};
-	const Reject reject = [this](int status, const sockaddr_in &clientAddr) {
-		return rejectRequest(status, clientAddr);
-	};
-
-	if (config_.model == Model::EventLoop) {
-		EventLoop loop(config, *socketHandler_, dispatch, reject, pool_ ? &*pool_ : nullptr);
-		loop.run(stop);
-		return;
-	}
-
-	BlockingLoop loop(config, *socketHandler_, dispatch, reject);
-	loop.run(stop);
 }
 
 Task<Response> Server::handle(Request &request) const {

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "HttpTypes.h"
+#include "ou/http/HttpTypes.h"
 
 #include <functional>
 #include <mutex>

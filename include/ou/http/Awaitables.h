@@ -1,7 +1,5 @@
 #pragma once
 
-#include "EventLoop.h"
-
 #include <chrono>
 #include <coroutine>
 #include <exception>
@@ -14,20 +12,30 @@
 
 namespace ou::http {
 
+namespace detail {
+
+	// The calling thread's event loop, which the awaiters below suspend on (see Awaitables.cpp)
+	[[nodiscard]] bool onEventLoop() noexcept;
+	[[nodiscard]] bool canOffload() noexcept;
+	void resumeAt(std::chrono::steady_clock::time_point deadline, std::coroutine_handle<> coroutine);
+	void resumeAfter(std::function<void()> work, std::coroutine_handle<> coroutine);
+
+} // namespace detail
+
 // Suspends a handler until a deadline on its event loop (sleeps the thread if not on an event loop)
 class SleepAwaiter {
 public:
 	explicit SleepAwaiter(std::chrono::milliseconds duration) : deadline_(std::chrono::steady_clock::now() + duration) {}
 
 	[[nodiscard]] bool await_ready() const {
-		if (EventLoop::current() != nullptr)
+		if (detail::onEventLoop())
 			return deadline_ <= std::chrono::steady_clock::now();
 
 		std::this_thread::sleep_until(deadline_);
 		return true;
 	}
 
-	void await_suspend(std::coroutine_handle<> coroutine) const { EventLoop::current()->resumeAt(deadline_, coroutine); }
+	void await_suspend(std::coroutine_handle<> coroutine) const { detail::resumeAt(deadline_, coroutine); }
 	void await_resume() const noexcept {}
 
 private:
@@ -41,7 +49,7 @@ public:
 	explicit OffloadAwaiter(std::function<R()> work) : work_(std::move(work)) {}
 
 	[[nodiscard]] bool await_ready() {
-		if (const EventLoop *loop = EventLoop::current(); loop != nullptr && loop->hasPool())
+		if (detail::canOffload())
 			return false;
 
 		run(work_, *result_);
@@ -49,7 +57,7 @@ public:
 	}
 
 	void await_suspend(std::coroutine_handle<> coroutine) {
-		EventLoop::current()->resumeAfter([work = std::move(work_), result = result_] { run(work, *result); }, coroutine);
+		detail::resumeAfter([work = std::move(work_), result = result_] { run(work, *result); }, coroutine);
 	}
 
 	[[nodiscard]] R await_resume() {

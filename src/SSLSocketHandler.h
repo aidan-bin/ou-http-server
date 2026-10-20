@@ -1,8 +1,8 @@
 #pragma once
 
 #include "SocketHandler.h"
+#include "ou/http/Server.h"
 
-#include <filesystem>
 #include <span>
 #include <string_view>
 
@@ -12,13 +12,7 @@ namespace ou {
 
 class SSLSocketHandler final : public SocketHandler {
 public:
-	struct Config {
-		bool enabled = false;
-		std::filesystem::path certPath;
-		std::filesystem::path keyPath;
-	};
-
-	explicit SSLSocketHandler(const Config &config);
+	explicit SSLSocketHandler(const http::Server::TlsConfig &config);
 	SSLSocketHandler(const SSLSocketHandler &) = delete;
 	SSLSocketHandler &operator=(const SSLSocketHandler &) = delete;
 	SSLSocketHandler(SSLSocketHandler &&) = delete;

@@ -44,7 +44,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: sudo apt-get update && sudo apt-get install -y ninja-build libboost-test-dev libssl-dev clang-format-19 clang-tidy-19
-      - run: clang-format-19 --dry-run -Werror src/*.h src/*.cpp tests/*.h tests/*.cpp fuzz/*.cpp
+      - run: clang-format-19 --dry-run -Werror src/*.h src/*.cpp include/ou/http/*.h demo/*.h demo/*.cpp tests/*.h tests/*.cpp fuzz/*.cpp
       - run: |
           cmake --preset default -DCLANG_TIDY_EXECUTABLE=$(which clang-tidy-19)
           cmake --build --preset tidy

@@ -7,7 +7,7 @@
 #include <utility>
 #include <variant>
 
-namespace ou {
+namespace ou::http {
 
 // Eager coroutine result; a plain T converts without a frame
 template <typename T>
@@ -77,4 +77,4 @@ private:
 	std::coroutine_handle<promise_type> handle_;
 };
 
-} // namespace ou
+} // namespace ou::http

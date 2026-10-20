@@ -1,6 +1,6 @@
-#include "HttpTypes.h"
 #include "RequestReader.h"
 #include "TestSupport.h"
+#include "ou/http/HttpTypes.h"
 
 #include <array>
 #include <boost/test/data/test_case.hpp>

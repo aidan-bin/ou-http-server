@@ -3,12 +3,12 @@
 #include "CompletionQueue.h"
 #include "ConnectionLoop.h"
 #include "HandlerPool.h"
-#include "HttpTypes.h"
 #include "Poller.h"
 #include "RequestReader.h"
 #include "SocketHandler.h"
-#include "Task.h"
 #include "UniqueFd.h"
+#include "ou/http/HttpTypes.h"
+#include "ou/http/Task.h"
 
 #include <array>
 #include <chrono>

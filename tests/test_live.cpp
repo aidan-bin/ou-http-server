@@ -1,7 +1,7 @@
-#include "AccessLog.h"
 #include "Client.h"
-#include "Server.h"
 #include "TestSupport.h"
+#include "ou/http/AccessLog.h"
+#include "ou/http/Server.h"
 
 #include <boost/test/data/test_case.hpp>
 #include <boost/test/unit_test.hpp>
