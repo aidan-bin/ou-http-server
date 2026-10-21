@@ -9,24 +9,21 @@
 #include "ou/http/StaticFiles.h"
 
 #include <algorithm>
-#include <atomic>
 #include <charconv>
 #include <chrono>
 #include <csignal>
 #include <exception>
+#include <expected>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
 #include <string_view>
 #include <system_error>
-#include <thread>
+
+#include <pthread.h>
 
 namespace {
-
-// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
-std::atomic<bool> g_running{ true };
-
-void sSignalHandler(int /*signum*/) { g_running.store(false); }
 
 // Short-circuits writes before routing, e.g., PUT /kv
 class ReadOnly final : public ou::http::Middleware {
@@ -38,38 +35,58 @@ public:
 	}
 };
 
-std::chrono::milliseconds sDemoDuration(int ms) { return std::chrono::milliseconds(std::clamp(ms, 0, 10'000)); }
+class Args {
+public:
+	Args(int argc, char **argv) : args_(std::span(argv, static_cast<size_t>(argc)).subspan(1)) {}
 
-int runServer(const auto &hasFlag, const auto &numberFlag) {
-	using namespace ou::http;
+	[[nodiscard]] bool has(std::string_view flag) const { return std::ranges::contains(args_, flag); }
 
-	Server::Config config;
-	config.port = 8080;
-	config.threadCount = 4;
-	config.model = hasFlag("--thread-per-core") ? Server::Model::ThreadPerCore : Server::Model::EventLoop;
-	config.logRequests = !hasFlag("--no-request-log");
-	config.handlerThreads = numberFlag("--handler-threads=");
-	config.https = { .enabled = !hasFlag("--no-tls"), .certPath = "./example/certs/cert.pem", .keyPath = "./example/certs/key.pem" };
-
-	const StaticFiles::Config filesConfig = { .directory = "./example/www",
-																						.enableDirectoryIndexing = true,
-																						.preloadBytes = hasFlag("--no-preload") ? 0 : size_t{ 64 } * 1024 * 1024,
-																						.skipSymlinkCheck = hasFlag("--skip-symlink-check") };
-	const auto files = StaticFiles::create(filesConfig);
-	if (!files) {
-		ou::logError("{}", files.error().message());
-		return EXIT_FAILURE;
+	[[nodiscard]] unsigned number(std::string_view prefix) const {
+		unsigned value = 0;
+		for (const std::string_view arg : args_) {
+			if (arg.starts_with(prefix))
+				(void)std::from_chars(std::to_address(arg.begin() + prefix.size()), std::to_address(arg.end()), value);
+		}
+		return value;
 	}
 
-	Router router;
-	router.fallback(*files);
+private:
+	std::span<char *> args_;
+};
 
-	if (!hasFlag("--no-access-log")) {
+// Blocks SIGINT and SIGTERM in this thread and every thread started later, so only wait() receives them
+class StopSignals {
+public:
+	StopSignals() {
+		sigemptyset(&signals_);
+		sigaddset(&signals_, SIGINT);
+		sigaddset(&signals_, SIGTERM);
+		pthread_sigmask(SIG_BLOCK, &signals_, nullptr);
+	}
+
+	void wait() const {
+		int received = 0;
+		sigwait(&signals_, &received);
+	}
+
+private:
+	sigset_t signals_{};
+};
+
+std::chrono::milliseconds sDemoDuration(int ms) { return std::chrono::milliseconds(std::clamp(ms, 0, 10'000)); }
+
+ou::http::Router sBuildRouter(const Args &args, ou::http::StaticFiles files) {
+	using namespace ou::http;
+
+	Router router;
+	router.fallback(std::move(files));
+
+	if (!args.has("--no-access-log")) {
 		const AccessLog::Config accessLogConfig = { .path = "access.log" };
 		router.layer(std::make_shared<AccessLog>(accessLogConfig));
 	}
 
-	if (hasFlag("--read-only"))
+	if (args.has("--read-only"))
 		router.layer(std::make_shared<ReadOnly>());
 
 	const auto kvStore = std::make_shared<KVStore>();
@@ -93,52 +110,45 @@ int runServer(const auto &hasFlag, const auto &numberFlag) {
 		});
 	});
 
-	Server server(config, router);
-	if (const auto started = server.start(); !started) {
-		ou::logError("Server failed to start: {}", started.error().message());
-		return EXIT_FAILURE;
-	}
-
-	using namespace std::chrono_literals;
-	while (g_running.load()) {
-		std::this_thread::sleep_for(100ms);
-	}
-
-	server.stop();
-
-	ou::logInfo("Exiting");
-	return EXIT_SUCCESS;
+	return router;
 }
 
 } // namespace
 
 int main(int argc, char **argv) {
-	const std::span args(argv, static_cast<size_t>(argc));
-
-	const auto hasFlag = [&](std::string_view flag) {
-		return std::ranges::contains(args.subspan(1), flag);
-	};
-
-	const auto numberFlag = [&](std::string_view prefix) {
-		unsigned value = 0;
-		for (const std::string_view arg : args.subspan(1)) {
-			if (arg.starts_with(prefix))
-				(void)std::from_chars(std::to_address(arg.begin() + prefix.size()), std::to_address(arg.end()), value);
-		}
-		return value;
-	};
-
-	(void)std::signal(SIGINT, sSignalHandler);
-	(void)std::signal(SIGTERM, sSignalHandler);
-	(void)std::signal(SIGPIPE, SIG_IGN); // A peer that disconnects mid-write would otherwise kill the process
-
 	try {
-		return runServer(hasFlag, numberFlag);
+		using namespace ou::http;
+
+		const StopSignals stopSignals;
+		(void)std::signal(SIGPIPE, SIG_IGN); // A peer that disconnects mid-write would otherwise kill the process
+
+		const Args args(argc, argv);
+
+		Server::Config config;
+		config.model = args.has("--thread-per-core") ? Server::Model::ThreadPerCore : Server::Model::EventLoop;
+		config.logRequests = !args.has("--no-request-log");
+		config.handlerThreads = args.number("--handler-threads=");
+		config.https = { .enabled = !args.has("--no-tls"), .certPath = "./example/certs/cert.pem", .keyPath = "./example/certs/key.pem" };
+
+		const StaticFiles::Config filesConfig = { .directory = "./example/www",
+																							.enableDirectoryIndexing = true,
+																							.preloadBytes = args.has("--no-preload") ? 0 : size_t{ 64 } * 1024 * 1024,
+																							.skipSymlinkCheck = args.has("--skip-symlink-check") };
+
+		const std::expected<Server, Error> server = StaticFiles::create(filesConfig)
+																										.transform(std::bind_front(sBuildRouter, std::cref(args)))
+																										.and_then(std::bind_front(&Server::start, config));
+		if (!server) {
+			ou::logError("{}", server.error().message());
+			return EXIT_FAILURE;
+		}
+
+		stopSignals.wait();
+
+		ou::logInfo("Exiting");
+		return EXIT_SUCCESS;
 	} catch (const std::exception &e) {
 		ou::logError("Fatal error: {}", e.what());
-		return EXIT_FAILURE;
-	} catch (...) {
-		ou::logError("Fatal error of unknown type");
 		return EXIT_FAILURE;
 	}
 }

@@ -20,7 +20,7 @@ namespace ou::http {
 // event-loop model's offload pool (stopped for good, so it lives and dies with the loops that use it).
 class Transport {
 public:
-	// Binds the listening socket and starts config.threadCount loops
+	// Fails on a config that could never serve, or if the port cannot be opened; else starts config.threadCount loops
 	[[nodiscard]] static std::expected<std::unique_ptr<Transport>, Error> start(const Server::Config &config, Dispatch dispatch,
 																																							Reject reject);
 

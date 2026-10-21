@@ -1,9 +1,7 @@
 #pragma once
 
 #include "ou/http/Error.h"
-#include "ou/http/HttpTypes.h"
 #include "ou/http/Router.h"
-#include "ou/http/Task.h"
 
 #include <chrono>
 #include <cstddef>
@@ -11,11 +9,6 @@
 #include <expected>
 #include <filesystem>
 #include <memory>
-#include <string>
-#include <string_view>
-#include <utility>
-
-#include <netinet/in.h>
 
 namespace ou::http {
 
@@ -52,41 +45,23 @@ public:
 		TlsConfig https;
 	};
 
-	explicit Server(Config config, Router router = {});
+	// Fails on a config that could never serve or a port that cannot be opened; takes ownership of the router
+	[[nodiscard]] static std::expected<Server, Error> start(const Config &config, Router router = {});
+
 	Server(const Server &) = delete;
 	Server &operator=(const Server &) = delete;
-	Server(Server &&) = delete;
+	Server(Server &&) noexcept;
 	Server &operator=(Server &&) = delete;
+
+	// Stops the handler pool first, then the loops, then closes the listening socket
 	~Server();
 
-	[[nodiscard]] std::expected<void, Error> start();
-	void stop();
-
-	// The bound port; valid after start()
-	[[nodiscard]] uint16_t port() const noexcept { return port_; }
+	[[nodiscard]] uint16_t port() const noexcept;
 
 private:
-	// Logs and runs the layers' postProcess on a request that never parsed
-	[[nodiscard]] Response rejectRequest(int status, const sockaddr_in &clientAddr) const;
+	explicit Server(std::unique_ptr<Transport> transport);
 
-	// Routes a request for a loop, then finalizes the response; request must outlive the task
-	[[nodiscard]] Task<Response> serve(Request &request, const sockaddr_in &clientAddr) const;
-
-	// Adds keep-alive and the log line to a routed response
-	[[nodiscard]] Response finalize(Response response, bool keepAlive, std::string_view logLine) const;
-
-	// Finalizes a handler that suspended, once it returns
-	[[nodiscard]] Task<Response> finalizeLater(Task<Response> handled, bool keepAlive, std::string logLine) const;
-
-	// Maps a request path to a file under the serving root; fails with 404, or 403 (logged) outside the root
-	[[nodiscard]] std::expected<std::string, int> resolveTarget(const std::string &requestPath) const;
-
-	Config config_;
-	uint16_t port_ = 0;
-
-	Router router_;
-
-	std::unique_ptr<Transport> transport_; // Set while started
+	std::unique_ptr<Transport> transport_;
 };
 
 } // namespace ou::http

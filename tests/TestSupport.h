@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <memory>
 #include <netinet/in.h>
 #include <optional>
 #include <ostream>
@@ -100,6 +101,12 @@ inline Server::Config makeConfig(Server::Model model = Server::Config{}.model) {
 	config.threadCount = 2;
 	config.model = model;
 	return config;
+}
+
+inline Server startServer(const Server::Config &config, Router router = {}) {
+	std::expected<Server, http::Error> server = Server::start(config, std::move(router));
+	BOOST_REQUIRE(server);
+	return std::move(*server);
 }
 
 // Runs a request through a router without sockets

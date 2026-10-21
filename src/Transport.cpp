@@ -7,17 +7,29 @@
 
 #include <exception>
 #include <format>
+#include <optional>
 #include <utility>
 
 namespace ou::http {
 
 namespace {
 
+	std::optional<Error> sConfigError(const Server::Config &config) {
+		if (config.threadCount == 0)
+			return Error{ .step = "validate config: threadCount must be at least 1", .code = {} };
+		if (config.handlerThreads > 0 && config.model != Server::Model::EventLoop)
+			return Error{ .step = "validate config: handlerThreads needs the event loop model", .code = {} };
+		return std::nullopt;
+	}
+
 	Error sStartError(const SocketError &error) { return { .step = std::string(error.step), .code = error.code }; }
 
 } // namespace
 
 std::expected<std::unique_ptr<Transport>, Error> Transport::start(const Server::Config &config, Dispatch dispatch, Reject reject) {
+	if (std::optional<Error> invalid = sConfigError(config))
+		return std::unexpected(std::move(*invalid));
+
 	std::unique_ptr<SocketHandler> socketHandler;
 	try {
 		if (config.https.enabled)
@@ -32,7 +44,7 @@ std::expected<std::unique_ptr<Transport>, Error> Transport::start(const Server::
 	if (!listener)
 		return std::unexpected(std::move(listener).error());
 
-	logInfo("Server socket {} bound and listening on port {}...", listener->socket.get(), listener->port);
+	logInfo("Server socket {} bound and listening on port {} with {} threads...", listener->socket.get(), listener->port, config.threadCount);
 	return std::make_unique<Transport>(config, std::move(socketHandler), std::move(*listener), std::move(dispatch), std::move(reject));
 }
 
@@ -48,11 +60,13 @@ Transport::Transport(const Server::Config &config, std::unique_ptr<SocketHandler
 }
 
 Transport::~Transport() {
+	logInfo("Stopping server...");
 	if (pool_)
 		pool_->stop();
 	for (std::jthread &thread : threads_)
 		thread.request_stop();
 	threads_.clear();
+	logInfo("Server stopped");
 }
 
 void Transport::run(const std::stop_token &stop) {

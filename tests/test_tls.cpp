@@ -61,8 +61,7 @@ BOOST_FIXTURE_TEST_SUITE(tls, ServingRoot)
 BOOST_DATA_TEST_CASE(test_tls, bdata::make(kModels), model) {
 	root.write("a.txt", "over tls");
 
-	Server server(sWithTls(config(model)), files());
-	BOOST_REQUIRE(server.start());
+	const Server server = startServer(sWithTls(config(model)), files());
 	const uint16_t port = server.port();
 
 	{ // Keep-alive over TLS: two requests on one session
@@ -93,9 +92,7 @@ BOOST_DATA_TEST_CASE(test_tls, bdata::make(kModels), model) {
 BOOST_AUTO_TEST_CASE(test_start_reports_bad_certificate) {
 	Server::Config missing = sWithTls(config(Server::Model::EventLoop));
 	missing.https.certPath = root.path() / "missing.pem";
-	Server server(missing);
-
-	const auto started = server.start();
+	const auto started = Server::start(missing);
 	BOOST_REQUIRE(!started);
 	BOOST_CHECK(started.error().step.starts_with("initialize socket handler"));
 }
@@ -104,8 +101,7 @@ BOOST_AUTO_TEST_CASE(test_start_reports_bad_certificate) {
 BOOST_AUTO_TEST_CASE(test_blocking_loop_times_out_silent_tls_peer) {
 	Server::Config silent = sWithTls(config(Server::Model::ThreadPerCore));
 	silent.readTimeout = std::chrono::seconds(1);
-	Server server(silent);
-	BOOST_REQUIRE(server.start());
+	const Server server = startServer(silent);
 
 	Client(server.port()).checkClosed();
 }

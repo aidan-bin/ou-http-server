@@ -8,6 +8,7 @@
 #include <boost/test/unit_test.hpp>
 #include <chrono>
 #include <format>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -46,8 +47,7 @@ void sCheckThrowingHandlerCloses(const Server::Config &config) {
 	router.route(Method::GET, "/throw-offloaded", [](const Request &) -> Task<Response> {
 		co_return co_await offload([]() -> Response { throw std::runtime_error("work failed"); });
 	});
-	Server server(config, router);
-	BOOST_REQUIRE(server.start());
+	const Server server = startServer(config, router);
 
 	for (const std::string_view path : { "/throw", "/throw-after-sleep", "/throw-offloaded" }) {
 		const Client client(server.port());
@@ -68,28 +68,10 @@ BOOST_AUTO_TEST_CASE(test_handler_pool_exception_closes_connection) {
 	sCheckThrowingHandlerCloses(pooled);
 }
 
-// The handler pool stops for good, so each start must get a fresh one
-BOOST_AUTO_TEST_CASE(test_offload_works_after_restart) {
-	Server::Config pooled = config(Server::Model::EventLoop);
-	pooled.handlerThreads = 1;
-	Router router;
-	router.route(Method::GET, "/work",
-							 [](const Request &) -> Task<Response> { co_return co_await offload([] { return Response::plainText(200, "done"); }); });
-
-	for (int run = 0; run < 2; ++run) {
-		Server server(pooled, router);
-		BOOST_REQUIRE(server.start());
-		const std::string response = roundTrip(server.port(), "GET /work HTTP/1.1\r\nHost: x\r\n\r\n");
-		BOOST_CHECK(response.ends_with("done"));
-		server.stop();
-	}
-}
-
 BOOST_DATA_TEST_CASE(test_coroutine_handler_round_trip, bdata::make(kModels), model) {
 	Router router;
 	router.route(Method::GET, "/nap", sNap);
-	Server server(config(model), router);
-	BOOST_REQUIRE(server.start());
+	const Server server = startServer(config(model), router);
 
 	const std::string response = roundTrip(server.port(), "GET /nap HTTP/1.1\r\nHost: x\r\n\r\n");
 	BOOST_CHECK(response.starts_with("HTTP/1.1 200 OK"));
@@ -101,8 +83,7 @@ BOOST_AUTO_TEST_CASE(test_event_loop_sleeps_without_holding_its_thread) {
 	single.threadCount = 1;
 	Router router;
 	router.route(Method::GET, "/nap", sNap);
-	Server server(single, router);
-	BOOST_REQUIRE(server.start());
+	const Server server = startServer(single, router);
 
 	std::vector<Client> clients;
 	clients.reserve(8);
@@ -123,8 +104,7 @@ BOOST_AUTO_TEST_CASE(test_event_loop_drops_a_sleep_whose_client_left) {
 	Router router;
 	router.route(Method::GET, "/nap", sNap);
 	router.route(Method::GET, "/fast", sFast);
-	Server server(single, router);
-	BOOST_REQUIRE(server.start());
+	const Server server = startServer(single, router);
 
 	Client(server.port()).send("GET /nap HTTP/1.1\r\nHost: x\r\n\r\n");
 
@@ -141,8 +121,7 @@ BOOST_AUTO_TEST_CASE(test_handler_pool_keeps_slow_work_off_the_loop) {
 	Router router;
 	router.route(Method::GET, "/slow", sSlowWork);
 	router.route(Method::GET, "/fast", sFast);
-	Server server(pooled, router);
-	BOOST_REQUIRE(server.start());
+	const Server server = startServer(pooled, router);
 
 	const Client slow(server.port());
 	slow.send("GET /slow HTTP/1.1\r\nHost: x\r\n\r\n");
@@ -160,18 +139,17 @@ BOOST_AUTO_TEST_CASE(test_handler_pool_stop_discards_queued_jobs) {
 	pooled.handlerThreads = 1;
 	Router router;
 	router.route(Method::GET, "/slow", sSlowWork);
-	Server server(pooled, router);
-	BOOST_REQUIRE(server.start());
+	std::optional<Server> server = startServer(pooled, router);
 
-	const Client running(server.port());
-	const Client queued(server.port());
+	const Client running(server->port());
+	const Client queued(server->port());
 	running.send("GET /slow HTTP/1.1\r\nHost: x\r\n\r\n");
 	std::this_thread::sleep_for(std::chrono::milliseconds(50));
 	queued.send("GET /slow HTTP/1.1\r\nHost: x\r\n\r\n");
 	std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
 	const auto start = std::chrono::steady_clock::now();
-	server.stop();
+	server.reset(); // Discards the queued job
 	BOOST_CHECK_LT(std::chrono::steady_clock::now() - start, kSlowHandler * 3 / 2);
 
 	queued.checkClosed();
