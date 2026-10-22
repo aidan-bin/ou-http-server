@@ -45,6 +45,16 @@ BOOST_AUTO_TEST_CASE(test_static_file_serving_and_mime_types) {
 	BOOST_CHECK_EQUAL(files(makeRequest("notes.txt")).statusCode, 400);
 }
 
+BOOST_AUTO_TEST_CASE(test_only_get_and_head_are_served) {
+	root.write("page.txt", "hi");
+	const StaticFiles files = sOpen({ .directory = root.path() });
+
+	BOOST_CHECK_EQUAL(files(makeRequest("/page.txt", Method::HEAD)).statusCode, 200);
+	const Response post = files(makeRequest("/page.txt", Method::POST));
+	BOOST_CHECK_EQUAL(post.statusCode, 405);
+	BOOST_CHECK_EQUAL(post.headers.at("Allow"), "GET, HEAD");
+}
+
 BOOST_AUTO_TEST_CASE(test_create_reports_an_unusable_directory) {
 	root.write("file.txt", "not a directory");
 

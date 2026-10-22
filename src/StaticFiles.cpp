@@ -255,6 +255,12 @@ std::expected<std::string, int> StaticFiles::State::resolveTarget(const std::str
 }
 
 Response StaticFiles::State::serve(const Request &request) const {
+	if (request.method != Method::GET && request.method != Method::HEAD) {
+		Response response = Response::error(405);
+		response.headers.emplace("Allow", "GET, HEAD");
+		return response;
+	}
+
 	if (!request.path.starts_with('/'))
 		return Response::error(400);
 
