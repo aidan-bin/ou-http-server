@@ -3,8 +3,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <format>
-#include <iostream>
-#include <mutex>
+#include <functional>
 #include <source_location>
 #include <string>
 #include <string_view>
@@ -21,14 +20,17 @@ struct LogFormat {
 	std::source_location location;
 };
 
+// Receives each formatted line, without the newline
+using LogSink = std::function<void(std::string_view line)>;
+
+// Replaces the default sink (stdout); an empty sink restores it
+void setLogSink(LogSink sink);
+
 namespace detail {
 
 	enum class LogLevel : uint8_t { Info, Warn, Error };
 
-	inline std::mutex &logMutex() {
-		static std::mutex mutex;
-		return mutex;
-	}
+	void emit(LogLevel level, const std::string &line) noexcept;
 
 	[[nodiscard]] constexpr std::string_view fileName(std::string_view path) { return path.substr(path.find_last_of('/') + 1); }
 
@@ -36,15 +38,9 @@ namespace detail {
 	void writeLine(LogLevel level, const LogFormat<const Args &...> &format, const Args &...args) noexcept {
 		try {
 			const std::string message = std::format(format.format, args...);
-			const std::string line = level == LogLevel::Info
-																	 ? std::format("[INFO] {}\n", message)
-																	 : std::format("[{}] {}:{}: {}\n", level == LogLevel::Warn ? "WARNING" : "ERROR",
-																								 fileName(format.location.file_name()), format.location.line(), message);
-
-			const std::lock_guard<std::mutex> lock(logMutex());
-			std::cout << line;
-			if (level != LogLevel::Info)
-				std::cout.flush();
+			emit(level, level == LogLevel::Info ? std::format("[INFO] {}", message)
+																					: std::format("[{}] {}:{}: {}", level == LogLevel::Warn ? "WARNING" : "ERROR",
+																												fileName(format.location.file_name()), format.location.line(), message));
 		} catch (...) {
 			(void)std::fputs("[ERROR] Failed to write a log line\n", stderr);
 		}
