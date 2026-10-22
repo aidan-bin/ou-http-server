@@ -35,6 +35,13 @@ public:
 	}
 };
 
+class ServerHeader final : public ou::http::Middleware {
+public:
+	void postProcess(const ou::http::Request & /*request*/, ou::http::Response &response) final {
+		response.headers["Server"] = "ou-http-server";
+	}
+};
+
 class Args {
 public:
 	Args(int argc, char **argv) : args_(std::span(argv, static_cast<size_t>(argc)).subspan(1)) {}
@@ -85,6 +92,8 @@ ou::http::Router sBuildRouter(const Args &args, ou::http::StaticFiles files) {
 		const AccessLog::Config accessLogConfig = { .path = "access.log" };
 		router.layer(std::make_shared<AccessLog>(accessLogConfig));
 	}
+
+	router.layer(std::make_shared<ServerHeader>());
 
 	if (args.has("--read-only"))
 		router.layer(std::make_shared<ReadOnly>());
