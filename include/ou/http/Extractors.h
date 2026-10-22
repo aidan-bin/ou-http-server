@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ou/http/HttpTypes.h"
+#include "ou/http/IntoResponse.h"
 #include "ou/http/Task.h"
 
 #include <algorithm>
@@ -132,8 +133,22 @@ namespace detail {
 		}
 	}
 
+	// What a handler returned, as a Response task: a value, or a task of one (which only needs a frame to convert)
+	template <IntoResponse R>
+	Task<Response> respond(R result) {
+		return intoResponse(std::move(result));
+	}
+
+	inline Task<Response> respond(Task<Response> task) { return task; }
+
+	template <IntoResponse U>
+	Task<Response> respond(Task<U> task) {
+		co_return intoResponse(co_await task);
+	}
+
 	template <typename F, typename R, typename... Ps>
 	auto extracting(F handler, R (F::* /*callOperator*/)(Ps...) const) {
+		static_assert(requires { respond(std::declval<R>()); }, "Handler must return a Response, a std::string, or a Task of one");
 		// A reference to an Extractor would dangle once a coroutine handler suspends
 		static_assert(((std::same_as<Ps, const Request &> || Extractor<Ps>) && ...),
 									"Handler parameters must be Extractors by value or const Request &");
@@ -142,13 +157,14 @@ namespace detail {
 			std::tuple<Ps...> args{ extractArg<Ps>(request, error)... }; // Braced init evaluates left to right
 			if (error)
 				return std::move(*error);
-			return std::apply(handler, std::move(args));
+			return respond(std::apply(handler, std::move(args)));
 		};
 	}
 
 } // namespace detail
 
-// Adapts a lambda taking Extractors (and optionally const Request &) to a request handler, without a coroutine frame
+// Adapts a lambda taking Extractors (and optionally const Request &) to a request handler, without a coroutine frame.
+// It may return anything IntoResponse, or a Task of it.
 template <typename F>
 [[nodiscard]] auto extracting(F handler) {
 	return detail::extracting(std::move(handler), &F::operator());

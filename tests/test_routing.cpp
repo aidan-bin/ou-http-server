@@ -6,6 +6,7 @@
 
 #include <boost/test/unit_test.hpp>
 #include <chrono>
+#include <expected>
 #include <format>
 #include <memory>
 #include <optional>
@@ -16,6 +17,9 @@ using namespace ou::http;
 using namespace ou::test;
 
 static_assert(Extractor<Query<"key">>);
+static_assert(IntoResponse<Response> && IntoResponse<std::string> && IntoResponse<const char *>);
+static_assert(IntoResponse<std::expected<std::string, Response>>);
+static_assert(!IntoResponse<int> && !IntoResponse<std::expected<int, Response>>);
 
 namespace {
 
@@ -160,6 +164,33 @@ BOOST_AUTO_TEST_CASE(test_extracting_handler) {
 	BOOST_CHECK_EQUAL(respond(router, request).body, "ou 3");
 	request.headers.pop_back();
 	BOOST_CHECK_EQUAL(respond(router, request).body, "Missing or bad X-Count header");
+}
+
+BOOST_AUTO_TEST_CASE(test_handler_returns_anything_into_response) {
+	router.route(Method::GET, "/text", [](Query<"name"> name) { return "hi " + name.value; });
+	router.route(Method::GET, "/result", [](Query<"n", int> n) -> std::expected<std::string, Response> {
+		if (n.value < 0)
+			return std::unexpected(Response::error(422));
+		return std::to_string(n.value);
+	});
+	router.route(Method::GET, "/later", [](Query<"name"> name) -> Task<std::string> {
+		co_await sleepFor(std::chrono::milliseconds(1));
+		co_return "hi " + name.value;
+	});
+
+	const auto call = [&](std::string_view path, std::string_view query) {
+		Request request = makeRequest(std::string(path));
+		request.query = query;
+		return respond(router, request);
+	};
+
+	const Response text = call("/text", "name=ou");
+	BOOST_CHECK_EQUAL(text.statusCode, 200);
+	BOOST_CHECK_EQUAL(text.body, "hi ou");
+	BOOST_CHECK_EQUAL(call("/text", "").statusCode, 400);
+	BOOST_CHECK_EQUAL(call("/result", "n=7").body, "7");
+	BOOST_CHECK_EQUAL(call("/result", "n=-1").statusCode, 422);
+	BOOST_CHECK_EQUAL(call("/later", "name=ou").body, "hi ou");
 }
 
 BOOST_AUTO_TEST_CASE(test_kv_store_methods) {

@@ -95,18 +95,18 @@ ou::http::Router sBuildRouter(const Args &args, ou::http::StaticFiles files) {
 	router.pattern({ Method::GET, Method::PUT, Method::DELETE }, "/kv/{key}",
 								 [kvStore](const Request &request, Path<"key"> key) { return kvStore->handle(request, key.value); });
 
-	router.route(Method::GET, "/whoami", [](Header<"User-Agent"> agent) { return Response::plainText(200, std::move(agent.value)); });
+	router.route(Method::GET, "/whoami", [](Header<"User-Agent"> agent) { return std::move(agent.value); });
 
-	router.route(Method::GET, "/sleep", [](Query<"ms", int> ms) -> Task<Response> {
+	router.route(Method::GET, "/sleep", [](Query<"ms", int> ms) -> Task<std::string> {
 		co_await ou::http::sleepFor(sDemoDuration(ms.value));
-		co_return Response::plainText(200, "OK");
+		co_return "OK";
 	});
 
-	router.route(Method::GET, "/work", [](Query<"ms", int> ms) -> Task<Response> {
+	router.route(Method::GET, "/work", [](Query<"ms", int> ms) -> Task<std::string> {
 		co_return co_await ou::http::offload([deadline = std::chrono::steady_clock::now() + sDemoDuration(ms.value)] {
 			while (std::chrono::steady_clock::now() < deadline) {
 			}
-			return Response::plainText(200, "OK");
+			return std::string("OK");
 		});
 	});
 
