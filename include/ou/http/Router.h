@@ -10,7 +10,9 @@
 #include <initializer_list>
 #include <map>
 #include <memory>
+#include <optional>
 #include <regex>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -51,8 +53,8 @@ public:
 	// Answers requests that no route matches (404 by default), e.g., with StaticFiles
 	Router &fallback(Handler handler);
 
-	// Layers' process(), then the exact path, then patterns, then the fallback, then every layer's
-	// postProcess(). May finish later if the handler suspends.
+	// Layers' process(), then the exact path, then patterns, then 405 if the path has routes for other methods,
+	// then the fallback, then every layer's postProcess(). May finish later if the handler suspends.
 	[[nodiscard]] Task<Response> handle(Request &request) const;
 
 	// Runs every layer's postProcess() and drops the body for HEAD; for a response with no routed request
@@ -60,19 +62,20 @@ public:
 
 private:
 	struct PatternRoute {
-		Method method = Method::GET;
+		std::string source;
 		std::regex pattern;
 		std::vector<std::string> names;
-		Handler handler;
+		std::map<Method, Handler> handlers;
 	};
 
-	// Exact path, then pattern, then the fallback; stores pattern captures in request
-	[[nodiscard]] const Handler &handlerFor(Request &request) const;
+	// Exact path, then pattern; null if none. Stores pattern captures in request, and adds to `allowed` the methods
+	// that the path is routed for but the request's is not
+	[[nodiscard]] const Handler *handlerFor(Request &request, std::set<Method> &allowed) const;
 	[[nodiscard]] Task<Response> dispatch(Request &request) const;
 	[[nodiscard]] Task<Response> postProcessLater(Task<Response> handled, const Request &request) const;
 
 	// Exact paths are looked up; patterns are tried in registration order
-	std::map<std::pair<Method, std::string>, Handler> pathHandlers_;
+	std::map<std::string, std::map<Method, Handler>> pathHandlers_;
 	std::vector<PatternRoute> patternHandlers_;
 	Handler fallback_ = [](const Request &) {
 		return Response::error(404);

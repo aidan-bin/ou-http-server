@@ -60,7 +60,7 @@ void AccessLog::flushLocked() {
 	buffer_.clear();
 }
 
-void AccessLog::postProcess(const Request &request, const Response &response) {
+void AccessLog::postProcess(const Request &request, Response &response) {
 	// Middleware hook to log every request with its final status
 	if (request.clientAddr)
 		log(request, response, *request.clientAddr);

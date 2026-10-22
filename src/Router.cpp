@@ -1,6 +1,9 @@
 #include "ou/http/Router.h"
 
+#include <algorithm>
 #include <optional>
+#include <set>
+#include <string>
 #include <string_view>
 
 namespace {
@@ -32,12 +35,22 @@ std::pair<std::string, std::vector<std::string>> sCompileSegments(const std::str
 	return { std::move(regex), std::move(names) };
 }
 
+ou::http::Response sNotAllowed(const std::set<ou::http::Method> &allowed) {
+	std::string allow;
+	for (const ou::http::Method method : allowed)
+		allow += (allow.empty() ? "" : ", ") + std::string(ou::http::methodToString(method));
+
+	ou::http::Response response = ou::http::Response::error(405);
+	response.headers.emplace("Allow", std::move(allow));
+	return response;
+}
+
 } // namespace
 
 namespace ou::http {
 
 Router &Router::route(Method method, const std::string &path, AnyHandler handler) {
-	pathHandlers_[{ method, path }] = std::move(handler.handler);
+	pathHandlers_[path][method] = std::move(handler.handler);
 	return *this;
 }
 
@@ -49,9 +62,16 @@ Router &Router::route(std::initializer_list<Method> methods, const std::string &
 }
 
 Router &Router::pattern(Method method, const std::string &pattern, AnyHandler handler) {
+	const auto existing = std::ranges::find(patternHandlers_, pattern, &PatternRoute::source);
+	if (existing != patternHandlers_.end()) {
+		existing->handlers.emplace(method, std::move(handler.handler));
+		return *this;
+	}
+
 	auto [regex, names] = sCompileSegments(pattern);
-	patternHandlers_.push_back(
-			{ .method = method, .pattern = std::regex(regex), .names = std::move(names), .handler = std::move(handler.handler) });
+	PatternRoute route = { .source = pattern, .pattern = std::regex(regex), .names = std::move(names), .handlers = {} };
+	route.handlers.emplace(method, std::move(handler.handler));
+	patternHandlers_.push_back(std::move(route));
 	return *this;
 }
 
@@ -85,25 +105,41 @@ Task<Response> Router::dispatch(Request &request) const {
 			return std::move(*response);
 	}
 
-	return handlerFor(request)(request);
+	std::set<Method> allowed;
+	if (const Handler *handler = handlerFor(request, allowed))
+		return (*handler)(request);
+	if (!allowed.empty())
+		return sNotAllowed(allowed);
+	return fallback_(request);
 }
 
-const Handler &Router::handlerFor(Request &request) const {
-	if (const auto path = pathHandlers_.find({ request.method, request.path }); path != pathHandlers_.end())
-		return path->second;
+const Handler *Router::handlerFor(Request &request, std::set<Method> &allowed) const {
+	if (const auto path = pathHandlers_.find(request.path); path != pathHandlers_.end()) {
+		if (const auto handler = path->second.find(request.method); handler != path->second.end())
+			return &handler->second;
+		for (const auto &[method, handler] : path->second)
+			allowed.insert(method);
+	}
 
 	std::smatch match;
 	for (const PatternRoute &route : patternHandlers_) {
-		if (route.method != request.method || !std::regex_match(request.path, match, route.pattern))
+		if (!std::regex_match(request.path, match, route.pattern))
 			continue;
+
+		const auto handler = route.handlers.find(request.method);
+		if (handler == route.handlers.end()) {
+			for (const auto &[method, unused] : route.handlers)
+				allowed.insert(method);
+			continue;
+		}
 
 		for (size_t i = 0; i < match.size(); ++i)
 			request.pathParams.emplace_back(match.position(i), match.length(i));
 		request.pathParamNames = route.names;
-		return route.handler;
+		return &handler->second;
 	}
 
-	return fallback_;
+	return nullptr;
 }
 
 Response Router::postProcess(const Request &request, Response response) const {

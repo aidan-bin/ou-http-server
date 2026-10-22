@@ -18,8 +18,8 @@ public:
 	// Runs before routing. Return a response to answer with it and skip routing; may modify `request`
 	virtual std::optional<Response> process(Request & /*request*/) { return std::nullopt; }
 
-	// Runs after every request (including short-circuited and rejected ones)
-	virtual void postProcess(const Request & /*request*/, const Response & /*response*/) {}
+	// Runs after every request (including short-circuited and rejected ones); may modify the final `response`
+	virtual void postProcess(const Request & /*request*/, Response & /*response*/) {}
 };
 
 } // namespace ou::http

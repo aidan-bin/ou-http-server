@@ -84,9 +84,41 @@ BOOST_AUTO_TEST_CASE(test_multi_method_registration) {
 
 	BOOST_CHECK_EQUAL(respond(router, makeRequest("/multi", Method::GET)).body, "GET");
 	BOOST_CHECK_EQUAL(respond(router, makeRequest("/multi", Method::PUT)).body, "PUT");
-	BOOST_CHECK_EQUAL(respond(router, makeRequest("/multi", Method::POST)).statusCode, 404);
 	BOOST_CHECK_EQUAL(respond(router, makeRequest("/multi/1", Method::DELETE)).body, "DELETE");
-	BOOST_CHECK_EQUAL(respond(router, makeRequest("/multi/1", Method::PUT)).statusCode, 404);
+}
+
+BOOST_AUTO_TEST_CASE(test_known_path_with_another_method_is_405_with_allow) {
+	const auto ok = [](const Request &) {
+		return Response::plainText(200, "ok");
+	};
+	router.route({ Method::GET, Method::PUT }, "/multi", ok);
+	router.pattern({ Method::GET, Method::DELETE }, R"(/multi/\d+)", ok);
+	router.fallback([](const Request &) { return Response::plainText(200, "fallback"); });
+
+	const Response exact = respond(router, makeRequest("/multi", Method::POST));
+	BOOST_CHECK_EQUAL(exact.statusCode, 405);
+	BOOST_CHECK_EQUAL(exact.headers.at("Allow"), "GET, PUT");
+
+	const Response pattern = respond(router, makeRequest("/multi/1", Method::PUT));
+	BOOST_CHECK_EQUAL(pattern.statusCode, 405);
+	BOOST_CHECK_EQUAL(pattern.headers.at("Allow"), "GET, DELETE");
+
+	BOOST_CHECK_EQUAL(respond(router, makeRequest("/elsewhere", Method::POST)).body, "fallback"); // No route for the path
+}
+
+BOOST_AUTO_TEST_CASE(test_layer_may_modify_the_final_response) {
+	class Tagging final : public Middleware {
+	public:
+		void postProcess(const Request & /*request*/, Response &response) final {
+			response.headers.emplace("X-Tag", std::to_string(response.statusCode));
+		}
+	};
+	router.layer(std::make_shared<Tagging>());
+	router.route(Method::GET, "/ok", [](const Request &) { return Response::plainText(200, "ok"); });
+
+	BOOST_CHECK_EQUAL(respond(router, makeRequest("/ok")).headers.at("X-Tag"), "200");
+	BOOST_CHECK_EQUAL(respond(router, makeRequest("/missing")).headers.at("X-Tag"), "404");
+	BOOST_CHECK_EQUAL(router.postProcess(makeRequest("/"), Response::error(413)).headers.at("X-Tag"), "413"); // A rejection
 }
 
 BOOST_AUTO_TEST_CASE(test_query_extractor) {
