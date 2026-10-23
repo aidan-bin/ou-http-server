@@ -10,7 +10,6 @@ namespace {
 
 constexpr auto kPollTimeout = std::chrono::milliseconds(100);
 
-// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 thread_local ou::http::EventLoop *g_currentLoop = nullptr;
 
 } // namespace

@@ -13,8 +13,7 @@ namespace ou {
 
 template <typename... Args>
 struct LogFormat {
-	consteval LogFormat(const char *text, std::source_location where = std::source_location::current()) // NOLINT(google-explicit-constructor)
-			: format(text), location(where) {}
+	consteval LogFormat(const char *text, std::source_location where = std::source_location::current()) : format(text), location(where) {}
 
 	std::format_string<Args...> format;
 	std::source_location location;

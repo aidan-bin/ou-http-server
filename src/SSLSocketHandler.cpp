@@ -18,7 +18,6 @@ namespace {
 
 	// Each connection's TLS session, by fd.
 	// Thread-local needs no lock since a connection never leaves its thread.
-	// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables) thread-local by design
 	thread_local std::unordered_map<int, SSL *> g_sessions;
 
 	SSL *sSession(int clientSocket) {

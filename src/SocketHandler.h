@@ -20,13 +20,11 @@ struct IoResult {
 };
 
 inline bool setNonBlocking(int fd, bool enable) {
-	// NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
 	const int flags = ::fcntl(fd, F_GETFL, 0);
 	if (flags < 0)
 		return false;
 
 	const int updated = enable ? (flags | O_NONBLOCK) : (flags & ~O_NONBLOCK);
-	// NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
 	return ::fcntl(fd, F_SETFL, updated) >= 0;
 }
 

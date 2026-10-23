@@ -67,18 +67,16 @@ struct CaseInsensitiveLess {
 // HTTP field names are case-insensitive
 using Headers = std::map<std::string, std::string, CaseInsensitiveLess>;
 
-// NOLINTBEGIN(cppcoreguidelines-pro-bounds-pointer-arithmetic,bugprone-suspicious-stringview-data-usage)
 // Parses all of text as a number; nullopt if anything is left over
 template <std::integral T>
 [[nodiscard]] std::optional<T> parseNumber(std::string_view text, int base = 10) {
 	T value{};
-	const char *end = text.data() + text.size();
-	const auto [stopped, ec] = std::from_chars(text.data(), end, value, base);
+	const char *end = std::to_address(text.end());
+	const auto [stopped, ec] = std::from_chars(std::to_address(text.begin()), end, value, base);
 	if (ec != std::errc{} || stopped != end)
 		return std::nullopt;
 	return value;
 }
-// NOLINTEND(cppcoreguidelines-pro-bounds-pointer-arithmetic,bugprone-suspicious-stringview-data-usage)
 
 // --- URLs ---
 

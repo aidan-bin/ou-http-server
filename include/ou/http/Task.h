@@ -37,7 +37,7 @@ public:
 	};
 
 	// Wraps a synchronous result; lets a plain T stand in for Task<T>
-	Task(T value) : value_(std::move(value)) {} // NOLINT(google-explicit-constructor)
+	Task(T value) : value_(std::move(value)) {}
 
 	Task(const Task &) = delete;
 	Task &operator=(const Task &) = delete;

@@ -17,7 +17,6 @@ using namespace std::chrono_literals;
 BOOST_AUTO_TEST_SUITE(transport)
 
 BOOST_AUTO_TEST_CASE(test_unique_fd_closes_once) {
-	// NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg) open() is variadic
 	ou::UniqueFd fd(::open("/dev/null", O_RDONLY));
 	BOOST_REQUIRE(fd.valid());
 	const int raw = fd.get();
@@ -33,7 +32,6 @@ BOOST_AUTO_TEST_CASE(test_unique_fd_closes_once) {
 	moved.reset(); // Idempotent
 
 	errno = 0;
-	// NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg) fcntl() is variadic
 	BOOST_CHECK_EQUAL(::fcntl(raw, F_GETFD), -1);
 	BOOST_CHECK_EQUAL(errno, EBADF);
 }

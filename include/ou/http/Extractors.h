@@ -27,7 +27,7 @@ concept Extractor = requires(const Request &request) {
 // String literal usable as a template argument, e.g., Query<"key">
 template <size_t N>
 struct FixedString {
-	// NOLINTNEXTLINE(google-explicit-constructor,*-avoid-c-arrays) converts from a literal by design
+	// NOLINTNEXTLINE(*-avoid-c-arrays) takes a literal by design
 	constexpr FixedString(const char (&text)[N]) { std::ranges::copy(text, chars.begin()); }
 
 	[[nodiscard]] constexpr std::string_view view() const { return { chars.data(), N - 1 }; }
@@ -37,9 +37,8 @@ struct FixedString {
 
 template <size_t N>
 struct PathKey {
-	// NOLINTNEXTLINE(google-explicit-constructor) converts from an index by design
 	constexpr PathKey(size_t index) : index(index), name("") {}
-	// NOLINTNEXTLINE(google-explicit-constructor,*-avoid-c-arrays) converts from a literal by design
+	// NOLINTNEXTLINE(*-avoid-c-arrays) takes a literal by design
 	constexpr PathKey(const char (&text)[N]) : name(text) {}
 
 	[[nodiscard]] constexpr bool named() const { return N > 1; }

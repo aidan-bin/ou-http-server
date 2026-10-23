@@ -25,7 +25,7 @@ using Handler = std::function<Task<Response>(const Request &)>;
 // A Handler, or a lambda taking Extractors and returning anything IntoResponse (wrapped by extracting())
 struct AnyHandler {
 	template <typename F>
-	AnyHandler(F handler) { // NOLINT(*-explicit-*) converts at the call site by design
+	AnyHandler(F handler) {
 		if constexpr (std::convertible_to<F, Handler>)
 			this->handler = std::move(handler);
 		else

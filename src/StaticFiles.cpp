@@ -61,10 +61,7 @@ bool sIsWithin(const std::filesystem::path &candidate, const std::filesystem::pa
 	return mismatched.in1 == root.end();
 }
 
-ou::UniqueFd sOpenReadOnly(const std::string &path) {
-	// NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg) open() is variadic
-	return ou::UniqueFd(::open(path.c_str(), O_RDONLY | O_CLOEXEC));
-}
+ou::UniqueFd sOpenReadOnly(const std::string &path) { return ou::UniqueFd(::open(path.c_str(), O_RDONLY | O_CLOEXEC)); }
 
 // Applies "." and ".." like lexically_normal(), without its per-segment allocations; null if ".." climbs above the root
 std::optional<std::string> sNormalizePath(std::string_view path) {
