@@ -1,5 +1,6 @@
 // Demo driver
 
+#include "Cli.h"
 #include "KVStore.h"
 #include "ou/http/AccessLog.h"
 #include "ou/http/Awaitables.h"
@@ -9,7 +10,6 @@
 #include "ou/http/StaticFiles.h"
 
 #include <algorithm>
-#include <charconv>
 #include <chrono>
 #include <csignal>
 #include <exception>
@@ -17,11 +17,6 @@
 #include <functional>
 #include <memory>
 #include <optional>
-#include <span>
-#include <string_view>
-#include <system_error>
-
-#include <pthread.h>
 
 namespace {
 
@@ -42,47 +37,9 @@ public:
 	}
 };
 
-class Args {
-public:
-	Args(int argc, char **argv) : args_(std::span(argv, static_cast<size_t>(argc)).subspan(1)) {}
-
-	[[nodiscard]] bool has(std::string_view flag) const { return std::ranges::contains(args_, flag); }
-
-	[[nodiscard]] unsigned number(std::string_view prefix) const {
-		unsigned value = 0;
-		for (const std::string_view arg : args_) {
-			if (arg.starts_with(prefix))
-				(void)std::from_chars(std::to_address(arg.begin() + prefix.size()), std::to_address(arg.end()), value);
-		}
-		return value;
-	}
-
-private:
-	std::span<char *> args_;
-};
-
-// Blocks SIGINT and SIGTERM in this thread and every thread started later, so only wait() receives them
-class StopSignals {
-public:
-	StopSignals() {
-		sigemptyset(&signals_);
-		sigaddset(&signals_, SIGINT);
-		sigaddset(&signals_, SIGTERM);
-		pthread_sigmask(SIG_BLOCK, &signals_, nullptr);
-	}
-
-	void wait() const {
-		int received = 0;
-		sigwait(&signals_, &received);
-	}
-
-private:
-	sigset_t signals_{};
-};
-
 std::chrono::milliseconds sDemoDuration(int ms) { return std::chrono::milliseconds(std::clamp(ms, 0, 10'000)); }
 
-ou::http::Router sBuildRouter(const Args &args, ou::http::StaticFiles files) {
+ou::http::Router sBuildRouter(const demo::Args &args, ou::http::StaticFiles files) {
 	using namespace ou::http;
 
 	Router router;
@@ -128,10 +85,10 @@ int main(int argc, char **argv) {
 	try {
 		using namespace ou::http;
 
-		const StopSignals stopSignals;
+		const demo::StopSignals stopSignals;
 		(void)std::signal(SIGPIPE, SIG_IGN); // A peer that disconnects mid-write would otherwise kill the process
 
-		const Args args(argc, argv);
+		const demo::Args args(argc, argv);
 
 		Server::Config config;
 		config.model = args.has("--thread-per-core") ? Server::Model::ThreadPerCore : Server::Model::EventLoop;
