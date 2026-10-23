@@ -44,7 +44,7 @@ class TempDir {
 public:
 	TempDir()
 			: path_(std::filesystem::temp_directory_path()
-							/ std::format("ou_http_server_test_{}_{}", ::getpid(), boost::unit_test::framework::current_test_case().p_id.get())) {
+	            / std::format("ou_http_server_test_{}_{}", ::getpid(), boost::unit_test::framework::current_test_case().p_id.get())) {
 		std::filesystem::remove_all(path_);
 		std::filesystem::create_directories(path_);
 	}

@@ -49,10 +49,10 @@ std::expected<std::unique_ptr<Transport>, Error> Transport::start(const Server::
 }
 
 Transport::Transport(const Server::Config &config, std::unique_ptr<SocketHandler> socketHandler, Listener listener, Dispatch dispatch,
-										 Reject reject)
+                     Reject reject)
 		: listenSocket_(std::move(listener.socket)), port_(listener.port), socketHandler_(std::move(socketHandler)),
 			pool_(config.model == Server::Model::EventLoop && config.handlerThreads > 0 ? std::make_unique<HandlerPool>(config.handlerThreads)
-																																									: nullptr),
+                                                                                  : nullptr),
 			dispatch_(std::move(dispatch)), reject_(std::move(reject)), model_(config.model),
 			loopConfig_{ .listenSocket = listenSocket_.get(), .maxRequestBytes = config.maxRequestBytes, .idleTimeout = config.readTimeout } {
 	for (unsigned i = 0; i < config.threadCount; ++i)

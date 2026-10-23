@@ -60,7 +60,7 @@ void Poller::wake() { (void)sApplyWake(queue_.get(), 0, NOTE_TRIGGER); }
 
 std::span<const ReadyEvent> Poller::wait(std::chrono::milliseconds timeout) {
 	const timespec deadline{ .tv_sec = static_cast<time_t>(timeout.count() / 1000),
-													 .tv_nsec = static_cast<long>(timeout.count() % 1000) * 1000000 };
+		                       .tv_nsec = static_cast<long>(timeout.count() % 1000) * 1000000 };
 	std::array<struct kevent, kMaxEvents> events{};
 
 	int count = 0;

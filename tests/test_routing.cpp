@@ -139,7 +139,7 @@ BOOST_AUTO_TEST_CASE(test_query_extractor) {
 BOOST_AUTO_TEST_CASE(test_pattern_captures) {
 	router.pattern(Method::GET, R"(/users/(\w+)/posts/(\d+)?)", [](const Request &request) {
 		return Response::plainText(200, std::format("{}|{}|{}", request.pathParam(1).value_or("-"), request.pathParam(2).value_or("-"),
-																								request.pathParam(3).value_or("-")));
+		                                            request.pathParam(3).value_or("-")));
 	});
 	router.pattern(Method::GET, R"(/id/(\w+))", [](Path<1, int> id) { return Response::plainText(200, std::to_string(id.value)); });
 
@@ -154,7 +154,7 @@ BOOST_AUTO_TEST_CASE(test_named_segments) {
 		return Response::plainText(200, std::format("{} {}", user.value, id.value));
 	});
 	router.pattern(Method::GET, "/raw/{n}",
-								 [](Path<1> n, Path<"missing"> missing) { return Response::plainText(200, n.value + missing.value); });
+	               [](Path<1> n, Path<"missing"> missing) { return Response::plainText(200, n.value + missing.value); });
 
 	BOOST_CHECK_EQUAL(respond(router, makeRequest("/users/ann/posts/7.json")).body, "ann 7");
 	BOOST_CHECK_EQUAL(respond(router, makeRequest("/users/ann/posts/x.json")).body, "Bad path parameter id");
@@ -165,7 +165,7 @@ BOOST_AUTO_TEST_CASE(test_named_segments) {
 
 BOOST_AUTO_TEST_CASE(test_extracting_handler) {
 	router.route(Method::GET, "/add",
-							 [](Query<"a", int> a, Query<"b", int> b) { return Response::plainText(200, std::to_string(a.value + b.value)); });
+	             [](Query<"a", int> a, Query<"b", int> b) { return Response::plainText(200, std::to_string(a.value + b.value)); });
 	router.route({ Method::GET, Method::PUT }, "/echo", [](const Request &request, Query<"name"> name) -> Task<Response> {
 		co_await sleepFor(std::chrono::milliseconds(1));
 		co_return Response::plainText(200, std::format("{} {}", request.method, name.value));
@@ -184,7 +184,7 @@ BOOST_AUTO_TEST_CASE(test_extracting_handler) {
 	BOOST_CHECK_EQUAL(call("/echo", "").statusCode, 400);
 
 	router.pattern(Method::GET, R"(/scaled/(\d+))",
-								 [](Path<1, int> n, Query<"by", int> by) { return Response::plainText(200, std::to_string(n.value * by.value)); });
+	               [](Path<1, int> n, Query<"by", int> by) { return Response::plainText(200, std::to_string(n.value * by.value)); });
 	BOOST_CHECK_EQUAL(call("/scaled/3", "by=4").body, "12");
 	BOOST_CHECK_EQUAL(call("/scaled/3", "").statusCode, 400);
 

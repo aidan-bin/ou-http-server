@@ -16,14 +16,14 @@ namespace {
 		localtime_r(&nowTime, &tmStruct);
 
 		return std::format("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", tmStruct.tm_year + 1900, tmStruct.tm_mon + 1, tmStruct.tm_mday,
-											 tmStruct.tm_hour, tmStruct.tm_min, tmStruct.tm_sec);
+		                   tmStruct.tm_hour, tmStruct.tm_min, tmStruct.tm_sec);
 	}
 
 	std::string sFormatLogEntry(const Request &request, const Response &response, const sockaddr_in &clientAddr) {
 		const std::string requestLine = request.path.empty() ? "-" : std::format("{} {}", request.method, request.path);
 
 		return std::format("[{}] {} - \"{}\" {} {}\n", sGetTimestamp(), addressToString(clientAddr), requestLine, response.statusCode,
-											 response.body.size());
+		                   response.body.size());
 	}
 } // namespace
 

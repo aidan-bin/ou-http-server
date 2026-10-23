@@ -49,8 +49,8 @@ private:
 
 Server::Config sWithTls(Server::Config config) {
 	config.https = { .enabled = true,
-									 .certPath = std::filesystem::path(TEST_CERT_DIR) / "cert.pem",
-									 .keyPath = std::filesystem::path(TEST_CERT_DIR) / "key.pem" };
+		               .certPath = std::filesystem::path(TEST_CERT_DIR) / "cert.pem",
+		               .keyPath = std::filesystem::path(TEST_CERT_DIR) / "key.pem" };
 	return config;
 }
 

@@ -151,7 +151,7 @@ namespace detail {
 		static_assert(requires { respond(std::declval<R>()); }, "Handler must return a Response, a std::string, or a Task of one");
 		// A reference to an Extractor would dangle once a coroutine handler suspends
 		static_assert(((std::same_as<Ps, const Request &> || Extractor<Ps>) && ...),
-									"Handler parameters must be Extractors by value or const Request &");
+		              "Handler parameters must be Extractors by value or const Request &");
 		return [handler = std::move(handler)](const Request &request) -> Task<Response> {
 			std::optional<Response> error;
 			std::tuple<Ps...> args{ extractArg<Ps>(request, error)... }; // Braced init evaluates left to right

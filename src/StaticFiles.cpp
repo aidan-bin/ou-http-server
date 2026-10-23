@@ -155,7 +155,7 @@ std::string sGenerateDirectoryIndex(const std::string &requestPath, const std::f
 		const std::string_view slash = entry.is_directory(ec) ? "/" : "";
 
 		html += std::format("<li><a href=\"{}{}\">{}{}</a></li>", ou::http::percentEncode(normalizedPath + name), slash, sHtmlEscape(name),
-												slash);
+		                    slash);
 	}
 
 	html += "</ul></body></html>";
@@ -190,7 +190,7 @@ std::expected<StaticFiles, Error> StaticFiles::create(Config config) {
 	state->root = std::filesystem::weakly_canonical(config.directory, ec);
 	if (!std::filesystem::is_directory(state->root, ec)) {
 		return std::unexpected(Error{ .step = std::format("open serving directory {}", config.directory.string()),
-																	.code = ec ? ec : std::make_error_code(std::errc::not_a_directory) });
+		                              .code = ec ? ec : std::make_error_code(std::errc::not_a_directory) });
 	}
 
 	state->config = std::move(config);
@@ -207,7 +207,7 @@ void StaticFiles::State::preload() {
 	std::error_code ec;
 
 	for (auto it = std::filesystem::recursive_directory_iterator(root, ec); !ec && it != std::filesystem::recursive_directory_iterator();
-			 it.increment(ec)) {
+	     it.increment(ec)) {
 		if (!it->is_regular_file(ec))
 			continue;
 

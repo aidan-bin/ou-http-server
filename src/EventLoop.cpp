@@ -253,7 +253,7 @@ void EventLoop::resume(const Resumption &resumption) {
 	// Closed (its fd maybe reused) or already answered: the coroutine is gone
 	const auto connection = connections_.find(resumption.request.fd);
 	if (connection == connections_.end() || connection->second.state != State::Suspended
-			|| connection->second.generation != resumption.request.generation)
+	    || connection->second.generation != resumption.request.generation)
 		return;
 
 	runningRequest_ = resumption.request;

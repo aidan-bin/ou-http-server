@@ -83,7 +83,7 @@ std::string percentEncode(std::string_view input) {
 
 	for (const unsigned char ch : input) {
 		const bool unreserved = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9')
-														|| kUnreserved.find(static_cast<char>(ch)) != std::string_view::npos;
+		                        || kUnreserved.find(static_cast<char>(ch)) != std::string_view::npos;
 		if (unreserved) {
 			encoded += static_cast<char>(ch);
 			continue;
@@ -231,7 +231,7 @@ std::string Response::serialize() const {
 	auto out = std::back_inserter(serialized);
 
 	std::format_to(out, "HTTP/1.1 {} {}\r\nContent-Length: {}\r\nConnection: {}\r\n", statusCode, reason, body.size(),
-								 keepAlive ? "keep-alive" : "close");
+	               keepAlive ? "keep-alive" : "close");
 
 	if (!headers.contains("Content-Type"))
 		serialized += "Content-Type: text/html\r\n";

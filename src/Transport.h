@@ -22,11 +22,11 @@ class Transport {
 public:
 	// Fails on a config that could never serve, or if the port cannot be opened; else starts config.threadCount loops
 	[[nodiscard]] static std::expected<std::unique_ptr<Transport>, Error> start(const Server::Config &config, Dispatch dispatch,
-																																							Reject reject);
+	                                                                            Reject reject);
 
 	// Use start(): this takes the resources it has already opened
 	Transport(const Server::Config &config, std::unique_ptr<SocketHandler> socketHandler, Listener listener, Dispatch dispatch,
-						Reject reject);
+	          Reject reject);
 	Transport(const Transport &) = delete;
 	Transport &operator=(const Transport &) = delete;
 	Transport(Transport &&) = delete;

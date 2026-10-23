@@ -39,8 +39,8 @@ namespace detail {
 		try {
 			const std::string message = std::format(format.format, args...);
 			emit(level, level == LogLevel::Info ? std::format("[INFO] {}", message)
-																					: std::format("[{}] {}:{}: {}", level == LogLevel::Warn ? "WARNING" : "ERROR",
-																												fileName(format.location.file_name()), format.location.line(), message));
+			                                    : std::format("[{}] {}:{}: {}", level == LogLevel::Warn ? "WARNING" : "ERROR",
+			                                                  fileName(format.location.file_name()), format.location.line(), message));
 		} catch (...) {
 			(void)std::fputs("[ERROR] Failed to write a log line\n", stderr);
 		}

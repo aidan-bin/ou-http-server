@@ -1,5 +1,5 @@
 BasedOnStyle: LLVM
-UseTab: Always
+UseTab: AlignWithSpaces
 TabWidth: 2
 BreakBeforeBraces: Attach
 AllowShortIfStatementsOnASingleLine: Never

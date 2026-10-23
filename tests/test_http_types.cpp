@@ -27,12 +27,12 @@ BOOST_AUTO_TEST_SUITE(http_types)
 BOOST_AUTO_TEST_CASE(test_request_parsing) {
 	RequestReader reader(1024);
 	BOOST_REQUIRE(reader.consume("GET /index.html HTTP/1.1\r\n"
-															 "Host: localhost\r\n"
-															 "User-Agent: BoostTest\r\n"
-															 "Content-Length: 12\r\n"
-															 "\r\n"
-															 "Body content")
-								== RequestReader::Status::Complete);
+	                             "Host: localhost\r\n"
+	                             "User-Agent: BoostTest\r\n"
+	                             "Content-Length: 12\r\n"
+	                             "\r\n"
+	                             "Body content")
+	              == RequestReader::Status::Complete);
 
 	const Request req = reader.take();
 	BOOST_CHECK_EQUAL(req.method, Method::GET);

@@ -69,11 +69,11 @@ namespace {
 
 std::expected<Listener, SocketError> openListener(uint16_t port) {
 	return sCreate()
-			.and_then(sReuseAddress)
-			.and_then(std::bind_front(sBind, port))
-			.and_then(sListen)
-			.and_then(sNonBlocking)
-			.and_then(sWithBoundPort);
+	    .and_then(sReuseAddress)
+	    .and_then(std::bind_front(sBind, port))
+	    .and_then(sListen)
+	    .and_then(sNonBlocking)
+	    .and_then(sWithBoundPort);
 }
 
 } // namespace ou

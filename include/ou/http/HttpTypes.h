@@ -134,7 +134,7 @@ template <std::integral T>
 struct Request {
 	Method method{ Method::GET };
 	bool http10 = false;
-	std::string path;				// Decoded
+	std::string path;       // Decoded
 	std::string_view query; // Raw, must be percent-decoded
 	std::vector<std::pair<std::string_view, std::string_view>> headers;
 	std::string_view body;

@@ -57,9 +57,9 @@ ou::http::Router sBuildRouter(const demo::Args &args, ou::http::StaticFiles file
 
 	const auto kvStore = std::make_shared<KVStore>();
 	router.route({ Method::GET, Method::PUT, Method::DELETE }, "/kv",
-							 [kvStore](const Request &request, Query<"key"> key) { return kvStore->handle(request, key.value); });
+	             [kvStore](const Request &request, Query<"key"> key) { return kvStore->handle(request, key.value); });
 	router.pattern({ Method::GET, Method::PUT, Method::DELETE }, "/kv/{key}",
-								 [kvStore](const Request &request, Path<"key"> key) { return kvStore->handle(request, key.value); });
+	               [kvStore](const Request &request, Path<"key"> key) { return kvStore->handle(request, key.value); });
 
 	router.route(Method::GET, "/whoami", [](Header<"User-Agent"> agent) { return std::move(agent.value); });
 
@@ -97,13 +97,13 @@ int main(int argc, char **argv) {
 		config.https = { .enabled = !args.has("--no-tls"), .certPath = "./example/certs/cert.pem", .keyPath = "./example/certs/key.pem" };
 
 		const StaticFiles::Config filesConfig = { .directory = "./example/www",
-																							.enableDirectoryIndexing = true,
-																							.preloadBytes = args.has("--no-preload") ? 0 : size_t{ 64 } * 1024 * 1024,
-																							.skipSymlinkCheck = args.has("--skip-symlink-check") };
+			                                        .enableDirectoryIndexing = true,
+			                                        .preloadBytes = args.has("--no-preload") ? 0 : size_t{ 64 } * 1024 * 1024,
+			                                        .skipSymlinkCheck = args.has("--skip-symlink-check") };
 
 		const std::expected<Server, Error> server = StaticFiles::create(filesConfig)
-																										.transform(std::bind_front(sBuildRouter, std::cref(args)))
-																										.and_then(std::bind_front(&Server::start, config));
+		                                                .transform(std::bind_front(sBuildRouter, std::cref(args)))
+		                                                .and_then(std::bind_front(&Server::start, config));
 		if (!server) {
 			ou::logError("{}", server.error().message());
 			return EXIT_FAILURE;
