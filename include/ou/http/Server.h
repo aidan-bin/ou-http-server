@@ -31,8 +31,8 @@ public:
 
 		// Requests over this limit are rejected with 413
 		size_t maxRequestBytes = size_t{ 1024 } * 1024;
-		// Stops a stalled connection from holding a worker thread
-		std::chrono::seconds readTimeout{ 10 };
+		// Closes a connection idle for this long
+		std::chrono::seconds idleTimeout{ 10 };
 
 		bool keepAlive = true;
 

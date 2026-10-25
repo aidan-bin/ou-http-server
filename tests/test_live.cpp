@@ -168,7 +168,7 @@ BOOST_DATA_TEST_CASE(test_rejection_is_logged, bdata::make(kModels), model) {
 
 BOOST_AUTO_TEST_CASE(test_event_loop_closes_idle_connection) {
 	Server::Config idle = config(Server::Model::EventLoop);
-	idle.readTimeout = std::chrono::seconds(1);
+	idle.idleTimeout = std::chrono::seconds(1);
 	const Server server = startServer(idle);
 
 	Client(server.port()).checkClosed();

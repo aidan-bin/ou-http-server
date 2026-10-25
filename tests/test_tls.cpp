@@ -126,7 +126,7 @@ BOOST_AUTO_TEST_CASE(test_start_reports_bad_certificate) {
 // Checks the socket timeouts are set before the handshake; needs TLS, since a plain-socket handshake is a no-op
 BOOST_AUTO_TEST_CASE(test_blocking_loop_times_out_silent_tls_peer) {
 	Server::Config silent = sWithTls(config(Server::Model::ThreadPerCore));
-	silent.readTimeout = std::chrono::seconds(1);
+	silent.idleTimeout = std::chrono::seconds(1);
 	const Server server = startServer(silent);
 
 	Client(server.port()).checkClosed();

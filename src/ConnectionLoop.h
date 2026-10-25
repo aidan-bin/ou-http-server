@@ -19,8 +19,8 @@ inline constexpr std::chrono::milliseconds kAcceptRetryDelay{ 10 };
 
 struct LoopConfig {
 	int listenSocket = -1; // Borrowed from Transport
-	size_t maxRequestBytes = size_t{ 1024 } * 1024;
-	std::chrono::seconds idleTimeout{ 10 };
+	size_t maxRequestBytes = 0;
+	std::chrono::seconds idleTimeout{};
 };
 
 } // namespace ou::http
