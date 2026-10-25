@@ -49,12 +49,13 @@ namespace {
 
 } // namespace
 
-SSLSocketHandler::SSLSocketHandler(const http::Server::TlsConfig &config) : sslCtx_(SSL_CTX_new(TLS_server_method())) {
+SSLSocketHandler::SSLSocketHandler(const std::filesystem::path &certPath, const std::filesystem::path &keyPath)
+		: sslCtx_(SSL_CTX_new(TLS_server_method())) {
 	// Minimum TLS 1.2, restricted to ECDHE + AES-GCM ciphers (TLS 1.3 suites are all AEAD, left at default)
 	if ((sslCtx_ == nullptr) || SSL_CTX_set_min_proto_version(sslCtx_, TLS1_2_VERSION) != 1
 	    || SSL_CTX_set_cipher_list(sslCtx_, "ECDHE+AESGCM") != 1 || SSL_CTX_set1_groups_list(sslCtx_, "X25519:prime256v1:secp384r1") != 1
-	    || SSL_CTX_use_certificate_file(sslCtx_, config.certPath.c_str(), SSL_FILETYPE_PEM) <= 0
-	    || SSL_CTX_use_PrivateKey_file(sslCtx_, config.keyPath.c_str(), SSL_FILETYPE_PEM) <= 0) {
+	    || SSL_CTX_use_certificate_file(sslCtx_, certPath.c_str(), SSL_FILETYPE_PEM) <= 0
+	    || SSL_CTX_use_PrivateKey_file(sslCtx_, keyPath.c_str(), SSL_FILETYPE_PEM) <= 0) {
 		SSL_CTX_free(sslCtx_);
 		std::array<char, 256> reason{};
 		ERR_error_string_n(ERR_get_error(), reason.data(), reason.size());

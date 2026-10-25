@@ -33,7 +33,7 @@ std::expected<std::unique_ptr<Transport>, Error> Transport::start(const Server::
 	std::unique_ptr<SocketHandler> socketHandler;
 	try {
 		if (config.https.enabled)
-			socketHandler = std::make_unique<SSLSocketHandler>(config.https);
+			socketHandler = std::make_unique<SSLSocketHandler>(config.https.certPath, config.https.keyPath);
 		else
 			socketHandler = std::make_unique<PlainSocketHandler>();
 	} catch (const std::exception &e) {
