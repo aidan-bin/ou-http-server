@@ -230,7 +230,7 @@ std::string Response::serialize() const {
 	serialized.reserve(kHeadEstimate + body.size());
 	auto out = std::back_inserter(serialized);
 
-	std::format_to(out, "HTTP/1.1 {} {}\r\nContent-Length: {}\r\nConnection: {}\r\n", statusCode, reason, body.size(),
+	std::format_to(out, "HTTP/1.1 {} {}\r\nContent-Length: {}\r\nConnection: {}\r\n", statusCode, reason, contentLength.value_or(body.size()),
 	               keepAlive ? "keep-alive" : "close");
 
 	if (!headers.contains("Content-Type"))

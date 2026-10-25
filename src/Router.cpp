@@ -147,8 +147,10 @@ Response Router::postProcess(const Request &request, Response response) const {
 		layer->postProcess(request, response);
 	}
 
-	if (request.method == Method::HEAD)
+	if (request.method == Method::HEAD) {
+		response.contentLength = response.body.size();
 		response.body.clear();
+	}
 
 	return response;
 }

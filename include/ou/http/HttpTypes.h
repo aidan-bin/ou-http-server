@@ -166,7 +166,8 @@ struct Response {
 	std::string reasonPhrase; // Derived from statusCode if empty
 	Headers headers;
 	std::string body;
-	bool keepAlive = false; // Emitted as the Connection header
+	bool keepAlive = false;              // Emitted as the Connection header
+	std::optional<size_t> contentLength; // Overrides body.size() in the header; a HEAD response keeps the GET length
 
 	[[nodiscard]] std::string serialize() const;
 

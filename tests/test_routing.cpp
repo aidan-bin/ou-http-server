@@ -75,6 +75,14 @@ BOOST_AUTO_TEST_CASE(test_coroutine_handler_routes_like_any_other) {
 	BOOST_CHECK_EQUAL(respond(router, makeRequest("/middleware")).body, "Intercepted by Middleware");
 }
 
+BOOST_AUTO_TEST_CASE(test_head_reports_the_length_of_the_get_body) {
+	router.route({ Method::GET, Method::HEAD }, "/hello", [](const Request &) { return Response::plainText(200, "hi there"); });
+
+	const std::string head = respond(router, makeRequest("/hello", Method::HEAD)).serialize();
+	BOOST_CHECK(head.contains("Content-Length: 8\r\n"));
+	BOOST_CHECK(head.ends_with("\r\n\r\n"));
+}
+
 BOOST_AUTO_TEST_CASE(test_multi_method_registration) {
 	const auto echoMethod = [](const Request &req) {
 		return Response::plainText(200, std::string(methodToString(req.method)));
