@@ -234,7 +234,7 @@ BOOST_AUTO_TEST_CASE(test_handler_returns_anything_into_response) {
 }
 
 BOOST_AUTO_TEST_CASE(test_kv_store_methods) {
-	KVStore store;
+	demo::KVStore store;
 
 	Request put = makeRequest("/kv", Method::PUT);
 	put.body = "value";

@@ -57,7 +57,7 @@ ou::http::Router sBuildRouter(const demo::Args &args, ou::http::StaticFiles file
 	if (args.has("--read-only"))
 		router.layer(std::make_shared<ReadOnly>());
 
-	const auto kvStore = std::make_shared<KVStore>();
+	const auto kvStore = std::make_shared<demo::KVStore>();
 	router.route({ Method::GET, Method::PUT, Method::DELETE }, "/kv",
 	             [kvStore](const Request &request, Query<"key"> key) { return kvStore->handle(request, key.value); });
 	router.pattern({ Method::GET, Method::PUT, Method::DELETE }, "/kv/{key}",

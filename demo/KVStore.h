@@ -9,7 +9,7 @@
 #include <string_view>
 #include <unordered_map>
 
-namespace ou::http {
+namespace demo {
 
 // Heterogeneous lookup for allocation-free string_view keys
 struct StringHash {
@@ -23,17 +23,17 @@ public:
 
 	[[nodiscard]] std::optional<std::string> get(std::string_view key) const;
 
-	// Return true if removed
+	// Returns true if removed
 	bool remove(std::string_view key);
 
 	[[nodiscard]] size_t size() const;
 
 	// Serves GET, PUT and DELETE on key; the body is the value
-	Response handle(const Request &request, const std::string &key);
+	ou::http::Response handle(const ou::http::Request &request, const std::string &key);
 
 private:
 	mutable std::mutex mutex_;
 	std::unordered_map<std::string, std::string, StringHash, std::equal_to<>> store_;
 };
 
-} // namespace ou::http
+} // namespace demo
