@@ -270,10 +270,8 @@ Response StaticFiles::State::serve(const Request &request) const {
 		return Response::error(target.error());
 
 	const UniqueFd file = sOpenReadOnly(*target);
-	if (!file && (errno == ENOENT || errno == ENOTDIR)) {
-		logError("File not found: {}", *target);
+	if (!file && (errno == ENOENT || errno == ENOTDIR))
 		return Response::error(404);
-	}
 
 	struct stat targetStatus{};
 	if (!file || ::fstat(file.get(), &targetStatus) < 0) {
