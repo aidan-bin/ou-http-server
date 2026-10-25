@@ -7,13 +7,13 @@
 #include <system_error>
 #include <utility>
 
+namespace ou::http {
+
 namespace {
 
-thread_local ou::http::EventLoop *g_currentLoop = nullptr;
+	thread_local EventLoop *g_currentLoop = nullptr;
 
 } // namespace
-
-namespace ou::http {
 
 EventLoop::EventLoop(Config config, SocketHandler &socketHandler, Dispatch dispatch, Reject reject, HandlerPool *pool)
 		: config_(config), socketHandler_(socketHandler), dispatch_(std::move(dispatch)), reject_(std::move(reject)), pool_(pool) {}

@@ -6,45 +6,45 @@
 #include <string>
 #include <string_view>
 
+namespace ou::http {
+
 namespace {
 
-// Regex and group names for a {name} pattern; any other pattern is already a regex
-std::pair<std::string, std::vector<std::string>> sCompileSegments(const std::string &pattern) {
-	const std::regex segment(R"(\{([A-Za-z_]\w*)\})");
-	std::string regex;
-	std::vector<std::string> names;
-	const auto appendLiteral = [&regex](std::string_view text) {
-		for (const char c : text) {
-			if (std::string_view(R"(\^$.|?*+()[]{})").contains(c))
-				regex += '\\';
-			regex += c;
-		}
-	};
+	// Regex and group names for a {name} pattern; any other pattern is already a regex
+	std::pair<std::string, std::vector<std::string>> sCompileSegments(const std::string &pattern) {
+		const std::regex segment(R"(\{([A-Za-z_]\w*)\})");
+		std::string regex;
+		std::vector<std::string> names;
+		const auto appendLiteral = [&regex](std::string_view text) {
+			for (const char c : text) {
+				if (std::string_view(R"(\^$.|?*+()[]{})").contains(c))
+					regex += '\\';
+				regex += c;
+			}
+		};
 
-	std::string_view rest = pattern;
-	for (auto it = std::sregex_iterator(pattern.begin(), pattern.end(), segment); it != std::sregex_iterator(); ++it) {
-		appendLiteral(it->prefix().str());
-		regex += "([^/]+)";
-		names.push_back((*it)[1].str());
-		rest = std::string_view(pattern).substr(it->position() + it->length());
+		std::string_view rest = pattern;
+		for (auto it = std::sregex_iterator(pattern.begin(), pattern.end(), segment); it != std::sregex_iterator(); ++it) {
+			appendLiteral(it->prefix().str());
+			regex += "([^/]+)";
+			names.push_back((*it)[1].str());
+			rest = std::string_view(pattern).substr(it->position() + it->length());
+		}
+
+		if (names.empty())
+			return { pattern, {} };
+		appendLiteral(rest);
+		return { std::move(regex), std::move(names) };
 	}
 
-	if (names.empty())
-		return { pattern, {} };
-	appendLiteral(rest);
-	return { std::move(regex), std::move(names) };
-}
-
-ou::http::Response sNotAllowed(const std::set<ou::http::Method> &allowed) {
-	std::string allow;
-	for (const ou::http::Method method : allowed)
-		allow += (allow.empty() ? "" : ", ") + std::string(ou::http::methodToString(method));
-	return ou::http::Response::notAllowed(std::move(allow));
-}
+	Response sNotAllowed(const std::set<Method> &allowed) {
+		std::string allow;
+		for (const Method method : allowed)
+			allow += (allow.empty() ? "" : ", ") + std::string(methodToString(method));
+		return Response::notAllowed(std::move(allow));
+	}
 
 } // namespace
-
-namespace ou::http {
 
 Router &Router::route(Method method, const std::string &path, AnyHandler handler) {
 	pathHandlers_[path][method] = std::move(handler.handler);

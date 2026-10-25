@@ -19,149 +19,148 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+namespace ou::http {
+
 namespace {
 
-constexpr auto kMimeTypes = std::to_array<std::pair<std::string_view, std::string_view>>({
-		{ ".html", "text/html" },
-		{ ".htm", "text/html" },
-		{ ".css", "text/css" },
-		{ ".js", "text/javascript" },
-		{ ".json", "application/json" },
-		{ ".txt", "text/plain" },
-		{ ".xml", "application/xml" },
-		{ ".svg", "image/svg+xml" },
-		{ ".png", "image/png" },
-		{ ".jpg", "image/jpeg" },
-		{ ".jpeg", "image/jpeg" },
-		{ ".gif", "image/gif" },
-		{ ".ico", "image/vnd.microsoft.icon" },
-		{ ".wasm", "application/wasm" },
-});
+	constexpr auto kMimeTypes = std::to_array<std::pair<std::string_view, std::string_view>>({
+			{ ".html", "text/html" },
+			{ ".htm", "text/html" },
+			{ ".css", "text/css" },
+			{ ".js", "text/javascript" },
+			{ ".json", "application/json" },
+			{ ".txt", "text/plain" },
+			{ ".xml", "application/xml" },
+			{ ".svg", "image/svg+xml" },
+			{ ".png", "image/png" },
+			{ ".jpg", "image/jpeg" },
+			{ ".jpeg", "image/jpeg" },
+			{ ".gif", "image/gif" },
+			{ ".ico", "image/vnd.microsoft.icon" },
+			{ ".wasm", "application/wasm" },
+	});
 
-// Finds the filename's extension as path::extension() does; empty for a dotfile like ".html"
-std::string_view sExtension(std::string_view path) {
-	const size_t dot = path.find_last_of("./");
-	if (dot == std::string_view::npos || path[dot] != '.' || dot == 0 || path[dot - 1] == '/')
-		return {};
-	return path.substr(dot);
-}
-
-std::string_view sMimeTypeFor(std::string_view path) {
-	const std::string_view extension = sExtension(path);
-	for (const auto &[suffix, type] : kMimeTypes) {
-		if (ou::http::equalsIgnoreCase(extension, suffix))
-			return type;
+	// Finds the filename's extension as path::extension() does; empty for a dotfile like ".html"
+	std::string_view sExtension(std::string_view path) {
+		const size_t dot = path.find_last_of("./");
+		if (dot == std::string_view::npos || path[dot] != '.' || dot == 0 || path[dot - 1] == '/')
+			return {};
+		return path.substr(dot);
 	}
-	return "application/octet-stream";
-}
 
-// Compares whole path components (e.g., so /srv/www2 is not inside /srv/www)
-bool sIsWithin(const std::filesystem::path &candidate, const std::filesystem::path &root) {
-	const auto mismatched = std::ranges::mismatch(root, candidate);
-	return mismatched.in1 == root.end();
-}
+	std::string_view sMimeTypeFor(std::string_view path) {
+		const std::string_view extension = sExtension(path);
+		for (const auto &[suffix, type] : kMimeTypes) {
+			if (equalsIgnoreCase(extension, suffix))
+				return type;
+		}
+		return "application/octet-stream";
+	}
 
-ou::UniqueFd sOpenReadOnly(const std::string &path) { return ou::UniqueFd(::open(path.c_str(), O_RDONLY | O_CLOEXEC)); }
+	// Compares whole path components (e.g., so /srv/www2 is not inside /srv/www)
+	bool sIsWithin(const std::filesystem::path &candidate, const std::filesystem::path &root) {
+		const auto mismatched = std::ranges::mismatch(root, candidate);
+		return mismatched.in1 == root.end();
+	}
 
-// Applies "." and ".." like lexically_normal(), without its per-segment allocations; null if ".." climbs above the root
-std::optional<std::string> sNormalizePath(std::string_view path) {
-	std::string normalized;
-	for (const auto part : std::views::split(path, '/')) {
-		const std::string_view segment(part.begin(), part.end());
-		if (segment.empty() || segment == ".")
-			continue;
+	UniqueFd sOpenReadOnly(const std::string &path) { return UniqueFd(::open(path.c_str(), O_RDONLY | O_CLOEXEC)); }
 
-		if (segment == "..") {
-			if (normalized.empty())
+	// Applies "." and ".." like lexically_normal(), without its per-segment allocations; null if ".." climbs above the root
+	std::optional<std::string> sNormalizePath(std::string_view path) {
+		std::string normalized;
+		for (const auto part : std::views::split(path, '/')) {
+			const std::string_view segment(part.begin(), part.end());
+			if (segment.empty() || segment == ".")
+				continue;
+
+			if (segment == "..") {
+				if (normalized.empty())
+					return std::nullopt;
+				normalized.resize(normalized.rfind('/'));
+				continue;
+			}
+
+			normalized += '/';
+			normalized += segment;
+		}
+		return normalized;
+	}
+
+	// Reads up to size bytes
+	std::optional<std::string> sReadFile(int fd, size_t size) {
+		std::string body(size, '\0');
+		size_t filled = 0;
+		while (filled < size) {
+			const std::span<char> rest = std::span(body).subspan(filled);
+			const ssize_t bytes = ::read(fd, rest.data(), rest.size());
+			if (bytes < 0)
 				return std::nullopt;
-			normalized.resize(normalized.rfind('/'));
-			continue;
+			if (bytes == 0)
+				break;
+			filled += static_cast<size_t>(bytes);
+		}
+		body.resize(filled);
+		return body;
+	}
+
+	std::string sHtmlEscape(std::string_view text) {
+		std::string escaped;
+		escaped.reserve(text.size());
+
+		for (const char ch : text) {
+			switch (ch) {
+			case '&':
+				escaped += "&amp;";
+				break;
+			case '<':
+				escaped += "&lt;";
+				break;
+			case '>':
+				escaped += "&gt;";
+				break;
+			case '"':
+				escaped += "&quot;";
+				break;
+			case '\'':
+				escaped += "&#39;";
+				break;
+			default:
+				escaped += ch;
+				break;
+			}
 		}
 
-		normalized += '/';
-		normalized += segment;
+		return escaped;
 	}
-	return normalized;
-}
 
-// Reads up to size bytes
-std::optional<std::string> sReadFile(int fd, size_t size) {
-	std::string body(size, '\0');
-	size_t filled = 0;
-	while (filled < size) {
-		const std::span<char> rest = std::span(body).subspan(filled);
-		const ssize_t bytes = ::read(fd, rest.data(), rest.size());
-		if (bytes < 0)
-			return std::nullopt;
-		if (bytes == 0)
-			break;
-		filled += static_cast<size_t>(bytes);
-	}
-	body.resize(filled);
-	return body;
-}
+	// A bare <ul> of links for a directory's contents, with a link to the parent if not at the root
+	std::string sGenerateDirectoryIndex(const std::string &requestPath, const std::filesystem::path &dirPath, std::error_code &ec) {
+		const std::string escapedPath = sHtmlEscape(requestPath);
+		std::string html
+				= std::format("<!DOCTYPE html><html><head><title>Index of {0}</title></head><body><h1>Index of {0}</h1><ul>", escapedPath);
 
-std::string sHtmlEscape(std::string_view text) {
-	std::string escaped;
-	escaped.reserve(text.size());
+		std::string normalizedPath = requestPath;
+		if (!normalizedPath.ends_with('/'))
+			normalizedPath += '/';
 
-	for (const char ch : text) {
-		switch (ch) {
-		case '&':
-			escaped += "&amp;";
-			break;
-		case '<':
-			escaped += "&lt;";
-			break;
-		case '>':
-			escaped += "&gt;";
-			break;
-		case '"':
-			escaped += "&quot;";
-			break;
-		case '\'':
-			escaped += "&#39;";
-			break;
-		default:
-			escaped += ch;
-			break;
+		if (requestPath != "/") {
+			// "/a/b/" -> "/a/"
+			const std::string parentPath = normalizedPath.substr(0, normalizedPath.find_last_of('/', normalizedPath.length() - 2) + 1);
+			html += std::format("<li><a href=\"{}\">..</a></li>", percentEncode(parentPath));
 		}
+
+		for (const auto &entry : std::filesystem::directory_iterator(dirPath, ec)) {
+			const std::string name = entry.path().filename().string();
+			const std::string_view slash = entry.is_directory(ec) ? "/" : "";
+
+			html += std::format("<li><a href=\"{}{}\">{}{}</a></li>", percentEncode(normalizedPath + name), slash, sHtmlEscape(name), slash);
+		}
+
+		html += "</ul></body></html>";
+		return html;
 	}
-
-	return escaped;
-}
-
-// A bare <ul> of links for a directory's contents, with a link to the parent if not at the root
-std::string sGenerateDirectoryIndex(const std::string &requestPath, const std::filesystem::path &dirPath, std::error_code &ec) {
-	const std::string escapedPath = sHtmlEscape(requestPath);
-	std::string html
-			= std::format("<!DOCTYPE html><html><head><title>Index of {0}</title></head><body><h1>Index of {0}</h1><ul>", escapedPath);
-
-	std::string normalizedPath = requestPath;
-	if (!normalizedPath.ends_with('/'))
-		normalizedPath += '/';
-
-	if (requestPath != "/") {
-		// "/a/b/" -> "/a/"
-		const std::string parentPath = normalizedPath.substr(0, normalizedPath.find_last_of('/', normalizedPath.length() - 2) + 1);
-		html += std::format("<li><a href=\"{}\">..</a></li>", ou::http::percentEncode(parentPath));
-	}
-
-	for (const auto &entry : std::filesystem::directory_iterator(dirPath, ec)) {
-		const std::string name = entry.path().filename().string();
-		const std::string_view slash = entry.is_directory(ec) ? "/" : "";
-
-		html += std::format("<li><a href=\"{}{}\">{}{}</a></li>", ou::http::percentEncode(normalizedPath + name), slash, sHtmlEscape(name),
-		                    slash);
-	}
-
-	html += "</ul></body></html>";
-	return html;
-}
 
 } // namespace
-
-namespace ou::http {
 
 struct StaticFiles::State {
 	struct PreloadedFile {
