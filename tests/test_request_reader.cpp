@@ -23,14 +23,19 @@ BOOST_AUTO_TEST_SUITE(request_reader)
 
 BOOST_AUTO_TEST_CASE(test_request_reader_ignores_read_boundaries) {
 	const std::vector<std::pair<std::string_view, std::vector<std::string>>> cases{
-		{ "POST /a?q=1 HTTP/1.1\r\nHost: h\r\nContent-Length: 5\r\n\r\nHELLOGET /b HTTP/1.1\r\n\r\n", { "POST /a q=1 h HELLO", "GET /b   " } },
-		{ "GET /a HTTP/1.1\r\n\r\nGET /c HTTP/1.1\r\nHost: ", { "GET /a   ", "reject 408" } },
-		{ "GET /a HTTP/1.1\r\n\r\nBOGUS / HTTP/1.1\r\n\r\n", { "GET /a   ", "reject 400" } },
-		{ "GET / HTTP/1.1\r\nContent-Length: 18446744073709551560\r\n\r\n", { "reject 413" } },
-		{ "POST /a HTTP/1.1\r\nContent-Length: 5x\r\n\r\nGET /b HTTP/1.1\r\n\r\n", { "reject 400" } },
-		{ "POST /a HTTP/1.1\r\nContent-Length: -1\r\n\r\nGET /b HTTP/1.1\r\n\r\n", { "reject 400" } },
-		{ "POST /a HTTP/1.1\r\nContent-Length: 99999999999999999999999\r\n\r\nGET /b HTTP/1.1\r\n\r\n", { "reject 400" } },
-		{ "POST /a HTTP/1.1\r\nContent-Length: 1\r\nContent-Length: 1\r\n\r\nx", { "POST /a   x" } },
+		{ "POST /a?q=1 HTTP/1.1\r\nHost: h\r\nContent-Length: 5\r\n\r\nHELLOGET /b HTTP/1.1\r\nHost: h\r\n\r\n",
+		  { "POST /a q=1 h HELLO", "GET /b  h " } },
+		{ "GET /a HTTP/1.1\r\nHost: h\r\n\r\nGET /c HTTP/1.1\r\nHost: ", { "GET /a  h ", "reject 408" } },
+		{ "GET /a HTTP/1.1\r\nHost: h\r\n\r\nBOGUS / HTTP/1.1\r\nHost: h\r\n\r\n", { "GET /a  h ", "reject 400" } },
+		{ "GET / HTTP/1.1\r\nHost: h\r\nContent-Length: 18446744073709551560\r\n\r\n", { "reject 413" } },
+		{ "POST /a HTTP/1.1\r\nHost: h\r\nContent-Length: 5x\r\n\r\nGET /b HTTP/1.1\r\nHost: h\r\n\r\n", { "reject 400" } },
+		{ "POST /a HTTP/1.1\r\nHost: h\r\nContent-Length: -1\r\n\r\nGET /b HTTP/1.1\r\nHost: h\r\n\r\n", { "reject 400" } },
+		{ "POST /a HTTP/1.1\r\nHost: h\r\nContent-Length: 99999999999999999999999\r\n\r\nGET /b HTTP/1.1\r\nHost: h\r\n\r\n",
+		  { "reject 400" } },
+		{ "POST /a HTTP/1.1\r\nHost: h\r\nContent-Length: 1\r\nContent-Length: 1\r\n\r\nx", { "POST /a  h x" } },
+		{ "GET /a HTTP/1.1\r\n\r\n", { "reject 400" } },
+		{ "GET /a HTTP/1.1\r\nHost: h\r\nhost: i\r\n\r\n", { "reject 400" } },
+		{ "GET /a HTTP/1.0\r\n\r\n", { "GET /a   " } },
 	};
 
 	for (const auto &[stream, expected] : cases) {
@@ -43,7 +48,7 @@ BOOST_AUTO_TEST_CASE(test_request_reader_ignores_read_boundaries) {
 }
 
 BOOST_AUTO_TEST_CASE(test_request_reader_enforces_size_limit) {
-	const std::string head = "POST / HTTP/1.1\r\nContent-Length: 10\r\n\r\n";
+	const std::string head = "POST / HTTP/1.1\r\nHost: h\r\nContent-Length: 10\r\n\r\n";
 
 	RequestReader fits(head.size() + 10);
 	BOOST_CHECK(fits.consume(head + std::string(10, 'a')) == RequestReader::Status::Complete);
@@ -82,7 +87,7 @@ BOOST_AUTO_TEST_CASE(test_request_views_survive_body_with_pipelined_bytes) {
 }
 
 BOOST_AUTO_TEST_CASE(test_request_reader_dribbled_head_is_linear) {
-	std::string stream = "GET / HTTP/1.1\r\n";
+	std::string stream = "GET / HTTP/1.1\r\nHost: h\r\n";
 	while (stream.size() < 64 * size_t{ 1024 })
 		stream += "a:b\r\n";
 	stream += "\r\n";

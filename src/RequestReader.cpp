@@ -63,6 +63,11 @@ RequestReader::Status RequestReader::parseBuffered() {
 			return reject(parsed.error());
 		request_ = std::move(*parsed);
 
+		// HTTP/1.1 requires exactly one Host
+		if (!request_->http10
+		    && std::ranges::count_if(request_->headers, [](const auto &field) { return equalsIgnoreCase(field.first, "Host"); }) != 1)
+			return reject(400);
+
 		// Chunked bodies aren't supported
 		if (request_->header("Transfer-Encoding"))
 			return reject(501);
