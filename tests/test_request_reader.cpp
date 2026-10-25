@@ -36,6 +36,9 @@ BOOST_AUTO_TEST_CASE(test_request_reader_ignores_read_boundaries) {
 		{ "GET /a HTTP/1.1\r\n\r\n", { "reject 400" } },
 		{ "GET /a HTTP/1.1\r\nHost: h\r\nhost: i\r\n\r\n", { "reject 400" } },
 		{ "GET /a HTTP/1.0\r\n\r\n", { "GET /a   " } },
+		{ "POST /a HTTP/1.1\r\nHost: h\r\nContent-Length: 3\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n", { "reject 400" } },
+		{ "POST /a HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\nContent-Length: 3\r\n\r\nabc", { "reject 400" } },
+		{ "POST /a HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n", { "reject 501" } },
 	};
 
 	for (const auto &[stream, expected] : cases) {

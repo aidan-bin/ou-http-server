@@ -68,9 +68,9 @@ RequestReader::Status RequestReader::parseBuffered() {
 		    && std::ranges::count_if(request_->headers, [](const auto &field) { return equalsIgnoreCase(field.first, "Host"); }) != 1)
 			return reject(400);
 
-		// Chunked bodies aren't supported
+		// TE with CL is a smuggling vector (RFC 9112 6.1); chunked isn't implemented
 		if (request_->header("Transfer-Encoding"))
-			return reject(501);
+			return reject(request_->header("Content-Length") ? 400 : 501);
 
 		const std::optional<size_t> contentLength = request_->contentLength();
 		if (!contentLength && request_->header("Content-Length"))
