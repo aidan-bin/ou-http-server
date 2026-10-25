@@ -4,7 +4,6 @@
 #include "ou/http/Server.h"
 #include "ou/http/StaticFiles.h"
 
-#include <arpa/inet.h>
 #include <array>
 #include <boost/test/unit_test.hpp>
 #include <expected>
@@ -12,14 +11,16 @@
 #include <format>
 #include <fstream>
 #include <memory>
-#include <netinet/in.h>
 #include <optional>
 #include <ostream>
 #include <string>
 #include <string_view>
-#include <unistd.h>
 #include <utility>
 #include <vector>
+
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <unistd.h>
 
 namespace ou::http {
 inline std::ostream &operator<<(std::ostream &os, Method method) { return os << methodToString(method); }
@@ -111,6 +112,12 @@ inline Server startServer(const Server::Config &config, Router router = {}) {
 	return std::move(*server);
 }
 
+inline StaticFiles openFiles(StaticFiles::Config config) {
+	std::expected<StaticFiles, http::Error> files = StaticFiles::create(std::move(config));
+	BOOST_REQUIRE(files);
+	return std::move(*files);
+}
+
 // Runs a request through a router without sockets
 inline Response respond(const Router &router, Request request) {
 	Task<Response> handled = router.handle(request);
@@ -120,9 +127,7 @@ inline Response respond(const Router &router, Request request) {
 struct ServingRoot {
 	TempDir root;
 
-	[[nodiscard]] static Server::Config config(Server::Model model = Server::Config{}.model) { return makeConfig(model); }
-
-	[[nodiscard]] Router files() const { return Router().fallback(StaticFiles::create({ .directory = root.path() }).value()); }
+	[[nodiscard]] Router files() const { return Router().fallback(openFiles({ .directory = root.path() })); }
 };
 
 } // namespace ou::test

@@ -9,7 +9,10 @@
 #include <string_view>
 #include <vector>
 
-namespace ou::http {
+namespace ou::test {
+
+using http::Request;
+using http::RequestReader;
 
 inline constexpr size_t kReadStreamMaxBytes = 1024;
 
@@ -38,4 +41,4 @@ inline std::vector<std::string> readStream(std::string_view stream, size_t chunk
 	return events;
 }
 
-} // namespace ou::http
+} // namespace ou::test

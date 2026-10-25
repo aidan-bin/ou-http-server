@@ -10,6 +10,7 @@
 #include <vector>
 
 using namespace ou::http;
+using namespace ou::test;
 
 #if defined(__SANITIZE_ADDRESS__)
 constexpr bool kAddressSanitizer = true;

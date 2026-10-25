@@ -7,13 +7,14 @@
 #include <cerrno>
 #include <chrono>
 #include <expected>
+#include <span>
+#include <thread>
+#include <utility>
+
 #include <fcntl.h>
 #include <netinet/in.h>
-#include <span>
 #include <sys/socket.h>
-#include <thread>
 #include <unistd.h>
-#include <utility>
 
 using namespace std::chrono_literals;
 

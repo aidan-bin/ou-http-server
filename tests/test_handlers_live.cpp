@@ -60,10 +60,12 @@ void sCheckThrowingHandlerCloses(const Server::Config &config) {
 
 BOOST_FIXTURE_TEST_SUITE(handlers_live, ServingRoot)
 
-BOOST_DATA_TEST_CASE(test_handler_exception_closes_connection, bdata::make(kModels), model) { sCheckThrowingHandlerCloses(config(model)); }
+BOOST_DATA_TEST_CASE(test_handler_exception_closes_connection, bdata::make(kModels), model) {
+	sCheckThrowingHandlerCloses(makeConfig(model));
+}
 
 BOOST_AUTO_TEST_CASE(test_handler_pool_exception_closes_connection) {
-	Server::Config pooled = config(Server::Model::EventLoop);
+	Server::Config pooled = makeConfig(Server::Model::EventLoop);
 	pooled.handlerThreads = 1;
 	sCheckThrowingHandlerCloses(pooled);
 }
@@ -71,7 +73,7 @@ BOOST_AUTO_TEST_CASE(test_handler_pool_exception_closes_connection) {
 BOOST_DATA_TEST_CASE(test_coroutine_handler_round_trip, bdata::make(kModels), model) {
 	Router router;
 	router.route(Method::GET, "/nap", sNap);
-	const Server server = startServer(config(model), router);
+	const Server server = startServer(makeConfig(model), router);
 
 	const std::string response = roundTrip(server.port(), "GET /nap HTTP/1.1\r\nHost: x\r\n\r\n");
 	BOOST_CHECK(response.starts_with("HTTP/1.1 200 OK"));
@@ -79,7 +81,7 @@ BOOST_DATA_TEST_CASE(test_coroutine_handler_round_trip, bdata::make(kModels), mo
 }
 
 BOOST_AUTO_TEST_CASE(test_event_loop_sleeps_without_holding_its_thread) {
-	Server::Config single = config(Server::Model::EventLoop);
+	Server::Config single = makeConfig(Server::Model::EventLoop);
 	single.threadCount = 1;
 	Router router;
 	router.route(Method::GET, "/nap", sNap);
@@ -99,7 +101,7 @@ BOOST_AUTO_TEST_CASE(test_event_loop_sleeps_without_holding_its_thread) {
 }
 
 BOOST_AUTO_TEST_CASE(test_event_loop_drops_a_sleep_whose_client_left) {
-	Server::Config single = config(Server::Model::EventLoop);
+	Server::Config single = makeConfig(Server::Model::EventLoop);
 	single.threadCount = 1;
 	Router router;
 	router.route(Method::GET, "/nap", sNap);
@@ -115,7 +117,7 @@ BOOST_AUTO_TEST_CASE(test_event_loop_drops_a_sleep_whose_client_left) {
 }
 
 BOOST_AUTO_TEST_CASE(test_handler_pool_keeps_slow_work_off_the_loop) {
-	Server::Config pooled = config(Server::Model::EventLoop);
+	Server::Config pooled = makeConfig(Server::Model::EventLoop);
 	pooled.handlerThreads = 2;
 	pooled.threadCount = 1;
 	Router router;
@@ -135,7 +137,7 @@ BOOST_AUTO_TEST_CASE(test_handler_pool_keeps_slow_work_off_the_loop) {
 }
 
 BOOST_AUTO_TEST_CASE(test_handler_pool_stop_discards_queued_jobs) {
-	Server::Config pooled = config(Server::Model::EventLoop);
+	Server::Config pooled = makeConfig(Server::Model::EventLoop);
 	pooled.handlerThreads = 1;
 	Router router;
 	router.route(Method::GET, "/slow", sSlowWork);

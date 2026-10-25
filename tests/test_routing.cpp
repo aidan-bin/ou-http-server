@@ -23,9 +23,9 @@ static_assert(!IntoResponse<int> && !IntoResponse<std::expected<int, Response>>)
 
 namespace {
 
-class TestMiddleware : public Middleware {
+class TestMiddleware final : public Middleware {
 public:
-	std::optional<Response> process(Request &request) override {
+	std::optional<Response> process(Request &request) final {
 		if (request.path == "/middleware")
 			return Response::plainText(200, "Intercepted by Middleware");
 		return std::nullopt;
@@ -34,6 +34,12 @@ public:
 
 struct RoutingFixture {
 	Router router;
+
+	[[nodiscard]] Response call(std::string_view path, std::string_view query, Method method = Method::GET) const {
+		Request request = makeRequest(std::string(path), method);
+		request.query = query;
+		return respond(router, request);
+	}
 };
 
 } // namespace
@@ -179,12 +185,6 @@ BOOST_AUTO_TEST_CASE(test_extracting_handler) {
 		co_return Response::plainText(200, std::format("{} {}", request.method, name.value));
 	});
 
-	const auto call = [&](std::string_view path, std::string_view query, Method method = Method::GET) {
-		Request request = makeRequest(std::string(path), method);
-		request.query = query;
-		return respond(router, request);
-	};
-
 	BOOST_CHECK_EQUAL(call("/add", "a=2&b=3").body, "5");
 	BOOST_CHECK_EQUAL(call("/add", "a=x&b=y").body, "Missing or bad a parameter"); // First failure wins
 	BOOST_CHECK_EQUAL(call("/add", "a=2").statusCode, 400);
@@ -217,12 +217,6 @@ BOOST_AUTO_TEST_CASE(test_handler_returns_anything_into_response) {
 		co_await sleepFor(std::chrono::milliseconds(1));
 		co_return "hi " + name.value;
 	});
-
-	const auto call = [&](std::string_view path, std::string_view query) {
-		Request request = makeRequest(std::string(path));
-		request.query = query;
-		return respond(router, request);
-	};
 
 	const Response text = call("/text", "name=ou");
 	BOOST_CHECK_EQUAL(text.statusCode, 200);

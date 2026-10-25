@@ -5,15 +5,15 @@
 #include <boost/test/data/test_case.hpp>
 #include <boost/test/unit_test.hpp>
 #include <chrono>
-#include <csignal>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
-#include <openssl/ssl.h>
 #include <span>
 #include <string>
 #include <string_view>
 #include <vector>
+
+#include <openssl/ssl.h>
 
 using namespace ou::http;
 using namespace ou::test;
@@ -74,7 +74,7 @@ BOOST_FIXTURE_TEST_SUITE(tls, ServingRoot)
 BOOST_DATA_TEST_CASE(test_tls, bdata::make(kModels), model) {
 	root.write("a.txt", "over tls");
 
-	const Server server = startServer(sWithTls(config(model)), files());
+	const Server server = startServer(sWithTls(makeConfig(model)), files());
 	const uint16_t port = server.port();
 
 	{ // Keep-alive over TLS: two requests on one session
@@ -103,8 +103,7 @@ BOOST_DATA_TEST_CASE(test_tls, bdata::make(kModels), model) {
 }
 
 BOOST_AUTO_TEST_CASE(test_protocol_and_cipher_policy) {
-	(void)std::signal(SIGPIPE, SIG_IGN); // Rejected handshakes write to a peer that already closed
-	const Server server = startServer(sWithTls(config(Server::Model::EventLoop)));
+	const Server server = startServer(sWithTls(makeConfig(Server::Model::EventLoop)));
 	const uint16_t port = server.port();
 
 	BOOST_CHECK(sHandshakes(port, TLS1_2_VERSION, TLS1_2_VERSION));
@@ -116,7 +115,7 @@ BOOST_AUTO_TEST_CASE(test_protocol_and_cipher_policy) {
 }
 
 BOOST_AUTO_TEST_CASE(test_start_reports_bad_certificate) {
-	Server::Config missing = sWithTls(config(Server::Model::EventLoop));
+	Server::Config missing = sWithTls(makeConfig(Server::Model::EventLoop));
 	missing.https.certPath = root.path() / "missing.pem";
 	const auto started = Server::start(missing);
 	BOOST_REQUIRE(!started);
@@ -125,7 +124,7 @@ BOOST_AUTO_TEST_CASE(test_start_reports_bad_certificate) {
 
 // Checks the socket timeouts are set before the handshake; needs TLS, since a plain-socket handshake is a no-op
 BOOST_AUTO_TEST_CASE(test_blocking_loop_times_out_silent_tls_peer) {
-	Server::Config silent = sWithTls(config(Server::Model::ThreadPerCore));
+	Server::Config silent = sWithTls(makeConfig(Server::Model::ThreadPerCore));
 	silent.idleTimeout = std::chrono::seconds(1);
 	const Server server = startServer(silent);
 

@@ -1,25 +1,13 @@
 #include "TestSupport.h"
-#include "ou/http/Error.h"
 #include "ou/http/HttpTypes.h"
 #include "ou/http/StaticFiles.h"
 
 #include <boost/test/unit_test.hpp>
-#include <expected>
 #include <filesystem>
 #include <string>
 
 using namespace ou::http;
 using namespace ou::test;
-
-namespace {
-
-StaticFiles sOpen(StaticFiles::Config config) {
-	std::expected<StaticFiles, Error> files = StaticFiles::create(std::move(config));
-	BOOST_REQUIRE(files);
-	return std::move(*files);
-}
-
-} // namespace
 
 BOOST_FIXTURE_TEST_SUITE(static_files, ServingRoot)
 
@@ -30,7 +18,7 @@ BOOST_AUTO_TEST_CASE(test_static_file_serving_and_mime_types) {
 	root.write("UPPER.TXT", "loud");
 	root.write(".html", "dotfile");
 
-	const StaticFiles files = sOpen({ .directory = root.path() });
+	const StaticFiles files = openFiles({ .directory = root.path() });
 
 	const Response html = files(makeRequest("/page.html"));
 	BOOST_CHECK_EQUAL(html.statusCode, 200);
@@ -47,7 +35,7 @@ BOOST_AUTO_TEST_CASE(test_static_file_serving_and_mime_types) {
 
 BOOST_AUTO_TEST_CASE(test_only_get_and_head_are_served) {
 	root.write("page.txt", "hi");
-	const StaticFiles files = sOpen({ .directory = root.path() });
+	const StaticFiles files = openFiles({ .directory = root.path() });
 
 	BOOST_CHECK_EQUAL(files(makeRequest("/page.txt", Method::HEAD)).statusCode, 200);
 	const Response post = files(makeRequest("/page.txt", Method::POST));
@@ -67,7 +55,7 @@ BOOST_AUTO_TEST_CASE(test_directory_traversal_is_rejected) {
 	std::filesystem::create_directory(root.path() / "www");
 	root.write("www/public.txt", "public");
 
-	const StaticFiles files = sOpen({ .directory = root.path() / "www" });
+	const StaticFiles files = openFiles({ .directory = root.path() / "www" });
 
 	BOOST_CHECK_EQUAL(files(makeRequest("/public.txt")).statusCode, 200);
 	BOOST_CHECK_EQUAL(files(makeRequest("/../secret.txt")).statusCode, 403);
@@ -82,7 +70,7 @@ BOOST_AUTO_TEST_CASE(test_skip_symlink_check_still_blocks_traversal) {
 	root.write("www/public.txt", "public");
 	std::filesystem::create_symlink(root.path() / "secret.txt", root.path() / "www/link.txt");
 
-	const StaticFiles files = sOpen({ .directory = root.path() / "www", .skipSymlinkCheck = true });
+	const StaticFiles files = openFiles({ .directory = root.path() / "www", .skipSymlinkCheck = true });
 
 	BOOST_CHECK_EQUAL(files(makeRequest("/public.txt")).body, "public");
 	BOOST_CHECK_EQUAL(files(makeRequest("/link.txt")).body, "secret");
@@ -99,10 +87,10 @@ BOOST_AUTO_TEST_CASE(test_directory_indexing_escapes_names) {
 	std::filesystem::create_directories(root.path() / "sub/inner");
 	root.write("sub/q&\"'.txt", "x");
 
-	const StaticFiles filesOff = sOpen({ .directory = root.path() });
+	const StaticFiles filesOff = openFiles({ .directory = root.path() });
 	BOOST_CHECK_EQUAL(filesOff(makeRequest("/")).statusCode, 403);
 
-	const StaticFiles filesOn = sOpen({ .directory = root.path(), .enableDirectoryIndexing = true });
+	const StaticFiles filesOn = openFiles({ .directory = root.path(), .enableDirectoryIndexing = true });
 	const Response index = filesOn(makeRequest("/"));
 	BOOST_CHECK_EQUAL(index.statusCode, 200);
 	BOOST_CHECK(index.body.contains("&lt;script&gt;"));
@@ -127,7 +115,7 @@ BOOST_AUTO_TEST_CASE(test_preloaded_files_are_served_from_memory) {
 	root.write("www/big.txt", std::string(64, 'x'));
 	std::filesystem::create_symlink(root.path() / "secret.txt", root.path() / "www/escape.txt");
 
-	const StaticFiles files = sOpen({ .directory = root.path() / "www", .preloadBytes = 32 });
+	const StaticFiles files = openFiles({ .directory = root.path() / "www", .preloadBytes = 32 });
 
 	root.write("www/small.txt", "changed");
 	root.write("www/big.txt", "big");

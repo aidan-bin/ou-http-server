@@ -25,7 +25,7 @@ BOOST_DATA_TEST_CASE(test_server_round_trip, bdata::make(kModels), model) {
 	root.write("hello.txt", "hello socket");
 	root.write("large.txt", std::string(200000, 'x'));
 
-	const Server server = startServer(config(model), files());
+	const Server server = startServer(makeConfig(model), files());
 	const uint16_t port = server.port();
 
 	const std::string ok = roundTrip(port, "GET /hello.txt HTTP/1.1\r\nHost: x\r\n\r\n");
@@ -34,6 +34,7 @@ BOOST_DATA_TEST_CASE(test_server_round_trip, bdata::make(kModels), model) {
 
 	const std::string head = roundTrip(port, "HEAD /hello.txt HTTP/1.1\r\nHost: x\r\n\r\n");
 	BOOST_CHECK(head.starts_with("HTTP/1.1 200 OK"));
+	BOOST_CHECK(head.contains("Content-Length: 12\r\n"));
 	BOOST_CHECK(head.ends_with("\r\n\r\n"));
 
 	const std::string split = roundTrip(port, { "GET /hello.txt HTTP/1.1\r\nHost: ", "x\r\n", "\r\n" });
@@ -54,7 +55,7 @@ BOOST_DATA_TEST_CASE(test_slow_reader_gets_whole_response, bdata::make(kModels),
 	constexpr size_t kSize = size_t{ 4 } * 1024 * 1024; // Past the socket buffers, forcing partial writes
 	root.write("huge.txt", std::string(kSize, 'x'));
 
-	const Server server = startServer(config(model), files());
+	const Server server = startServer(makeConfig(model), files());
 
 	const Client client(server.port());
 	client.send("GET /huge.txt HTTP/1.1\r\nHost: x\r\n\r\n");
@@ -77,7 +78,7 @@ BOOST_AUTO_TEST_CASE(test_start_reports_failed_step) {
 
 BOOST_AUTO_TEST_CASE(test_server_keeps_serving_after_a_move) {
 	root.write("hello.txt", "hello");
-	Server original = startServer(config(), files());
+	Server original = startServer(makeConfig(), files());
 	const Server moved = std::move(original);
 
 	BOOST_CHECK(roundTrip(moved.port(), "GET /hello.txt HTTP/1.1\r\nHost: x\r\n\r\n").ends_with("hello"));
@@ -97,7 +98,7 @@ BOOST_DATA_TEST_CASE(test_keep_alive, bdata::make(kModels), model) {
 	root.write("a.txt", "aaa");
 	root.write("b.txt", "bbbb");
 
-	const Server server = startServer(config(model), files());
+	const Server server = startServer(makeConfig(model), files());
 	const uint16_t port = server.port();
 
 	{ // Two requests down one connection
@@ -139,7 +140,7 @@ BOOST_DATA_TEST_CASE(test_keep_alive, bdata::make(kModels), model) {
 BOOST_DATA_TEST_CASE(test_keep_alive_can_be_disabled, bdata::make(kModels), model) {
 	root.write("a.txt", "aaa");
 
-	Server::Config closing = config(model);
+	Server::Config closing = makeConfig(model);
 	closing.keepAlive = false;
 	const Server server = startServer(closing, files());
 
@@ -156,7 +157,7 @@ BOOST_DATA_TEST_CASE(test_rejection_is_logged, bdata::make(kModels), model) {
 	router.layer(std::make_shared<AccessLog>(AccessLog::Config{ .path = logPath, .flushBytes = 0 }));
 
 	{ // Destroying the server flushes the log
-		const Server server = startServer(config(model), router);
+		const Server server = startServer(makeConfig(model), router);
 		BOOST_CHECK(roundTrip(server.port(), "BOGUS / HTTP/1.1\r\nHost: x\r\n\r\n").starts_with("HTTP/1.1 400"));
 	}
 
@@ -167,7 +168,7 @@ BOOST_DATA_TEST_CASE(test_rejection_is_logged, bdata::make(kModels), model) {
 }
 
 BOOST_AUTO_TEST_CASE(test_event_loop_closes_idle_connection) {
-	Server::Config idle = config(Server::Model::EventLoop);
+	Server::Config idle = makeConfig(Server::Model::EventLoop);
 	idle.idleTimeout = std::chrono::seconds(1);
 	const Server server = startServer(idle);
 

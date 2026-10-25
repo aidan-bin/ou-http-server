@@ -10,13 +10,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
-#include <netinet/in.h>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
-#include <sys/socket.h>
 #include <thread>
+
+#include <netinet/in.h>
+#include <sys/socket.h>
 
 namespace ou::test {
 

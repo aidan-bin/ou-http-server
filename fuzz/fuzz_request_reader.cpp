@@ -5,7 +5,7 @@
 #include <cstdlib>
 #include <string_view>
 
-using namespace ou::http;
+using namespace ou::test;
 
 // First byte picks the read size; N-byte reads must parse exactly like one whole read
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
