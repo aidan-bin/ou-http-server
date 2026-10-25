@@ -22,6 +22,8 @@
 #include <vector>
 
 namespace ou::http {
+inline std::ostream &operator<<(std::ostream &os, Method method) { return os << methodToString(method); }
+
 inline std::ostream &operator<<(std::ostream &os, Server::Model model) {
 	return os << (model == Server::Model::EventLoop ? "EventLoop" : "ThreadPerCore");
 }

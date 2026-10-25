@@ -30,13 +30,12 @@ public:
 	AccessLog &operator=(AccessLog &&) = delete;
 	~AccessLog() override;
 
-	void log(const Request &request, const Response &response, const sockaddr_in &clientAddr);
-
 	void flush();
 
 	void postProcess(const Request &request, Response &response) final;
 
 private:
+	void log(const Request &request, const Response &response, const sockaddr_in &clientAddr);
 	void flushLocked();
 
 	Config config_;

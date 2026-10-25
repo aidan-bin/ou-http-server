@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <iterator>
-#include <ostream>
 #include <ranges>
 
 #include <arpa/inet.h>
@@ -39,11 +38,6 @@ namespace {
 		return std::ranges::any_of(std::views::split(fieldValue, ','), listed);
 	}
 } // namespace
-
-std::ostream &operator<<(std::ostream &os, Method method) {
-	os << methodToString(method);
-	return os;
-}
 
 bool CaseInsensitiveLess::operator()(std::string_view lhs, std::string_view rhs) const noexcept {
 	return std::ranges::lexicographical_compare(lhs, rhs, {}, sToLower, sToLower);

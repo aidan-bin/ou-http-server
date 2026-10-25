@@ -51,8 +51,6 @@ inline constexpr auto kMethodNames = std::to_array<std::pair<std::string_view, M
 	return "UNKNOWN";
 }
 
-std::ostream &operator<<(std::ostream &os, Method method);
-
 // --- Strings ---
 
 [[nodiscard]] bool equalsIgnoreCase(std::string_view lhs, std::string_view rhs) noexcept;
