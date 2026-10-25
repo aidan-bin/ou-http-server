@@ -1,3 +1,4 @@
+#include "Listener.h"
 #include "Poller.h"
 #include "UniqueFd.h"
 
@@ -5,7 +6,9 @@
 #include <boost/test/unit_test.hpp>
 #include <cerrno>
 #include <chrono>
+#include <expected>
 #include <fcntl.h>
+#include <netinet/in.h>
 #include <span>
 #include <sys/socket.h>
 #include <thread>
@@ -34,6 +37,19 @@ BOOST_AUTO_TEST_CASE(test_unique_fd_closes_once) {
 	errno = 0;
 	BOOST_CHECK_EQUAL(::fcntl(raw, F_GETFD), -1);
 	BOOST_CHECK_EQUAL(errno, EBADF);
+}
+
+BOOST_AUTO_TEST_CASE(test_accept_tells_transient_errors_from_persistent_ones) {
+	const std::expected<ou::Listener, ou::SocketError> listener = ou::openListener(0);
+	BOOST_REQUIRE(listener);
+	sockaddr_in clientAddr{};
+
+	const auto none = ou::acceptClient(listener->socket.get(), clientAddr);
+	BOOST_REQUIRE(none);
+	BOOST_CHECK(!none->valid());
+
+	const ou::UniqueFd notListening(::socket(AF_INET, SOCK_STREAM, 0));
+	BOOST_CHECK(!ou::acceptClient(notListening.get(), clientAddr));
 }
 
 BOOST_AUTO_TEST_CASE(test_poller_readiness) {

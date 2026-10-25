@@ -108,6 +108,9 @@ private:
 	// Closes idle connections
 	void sweepIdle();
 
+	void pauseAccepting();
+	void resumeAccepting();
+
 	Config config_;
 	SocketHandler &socketHandler_;
 	Dispatch dispatch_;
@@ -118,6 +121,7 @@ private:
 	CompletionQueue completions_{ poller_ };
 	std::multimap<std::chrono::steady_clock::time_point, Resumption> timers_;
 	ConnectionMap connections_;
+	std::optional<std::chrono::steady_clock::time_point> acceptPausedUntil_;
 	uint64_t nextGeneration_ = 0;
 	RequestId runningRequest_; // The request whose handler is running; awaitables tag their resumptions with it
 	std::array<char, RequestReader::kChunkBytes> scratch_{};

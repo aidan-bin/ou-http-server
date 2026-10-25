@@ -1,27 +1,19 @@
 #include "BlockingLoop.h"
+#include "Listener.h"
 #include "UniqueFd.h"
 #include "ou/http/Logging.h"
 
 #include <array>
 #include <cerrno>
-#include <chrono>
 #include <exception>
+#include <expected>
+#include <system_error>
 #include <thread>
 #include <utility>
 
 #include <poll.h>
 #include <sys/socket.h>
 #include <sys/time.h>
-
-namespace {
-
-constexpr int kAcceptPollMs = 200;
-constexpr auto kAcceptRetryDelay = std::chrono::milliseconds(10);
-
-// Not failures: another worker took the connection, the client hung up while queued, or a signal
-bool sIsBenignAcceptError(int error) { return error == EAGAIN || error == EWOULDBLOCK || error == ECONNABORTED || error == EINTR; }
-
-} // namespace
 
 namespace ou::http {
 
@@ -31,7 +23,7 @@ BlockingLoop::BlockingLoop(Config config, SocketHandler &socketHandler, Dispatch
 UniqueFd BlockingLoop::acceptOne(sockaddr_in &clientAddr) const {
 	pollfd descriptor{ .fd = config_.listenSocket, .events = POLLIN, .revents = 0 };
 
-	const int ready = ::poll(&descriptor, 1, kAcceptPollMs);
+	const int ready = ::poll(&descriptor, 1, static_cast<int>(kPollTimeout.count()));
 	if (ready == 0)
 		return {};
 
@@ -41,20 +33,16 @@ UniqueFd BlockingLoop::acceptOne(sockaddr_in &clientAddr) const {
 		return {};
 	}
 
-	socklen_t clientLen = sizeof(clientAddr);
-	UniqueFd clientSocket(::accept(config_.listenSocket, reinterpret_cast<struct sockaddr *>(&clientAddr), &clientLen));
-	if (!clientSocket) {
-		// Back off on real errors so a persistent one can't spin this thread
-		if (!sIsBenignAcceptError(errno)) {
-			logWarn("Failed to accept connection: errno {}", errno);
-			std::this_thread::sleep_for(kAcceptRetryDelay);
-		}
+	std::expected<UniqueFd, std::error_code> client = acceptClient(config_.listenSocket, clientAddr);
+	if (!client) {
+		logWarn("Failed to accept connection: {}", client.error().message());
+		std::this_thread::sleep_for(kAcceptRetryDelay);
 		return {};
 	}
 
 	// macOS/BSD accept() copies O_NONBLOCK from the listener; this model needs blocking reads that time out
-	(void)setNonBlocking(clientSocket.get(), false);
-	return clientSocket;
+	(void)setNonBlocking(client->get(), false);
+	return std::move(*client);
 }
 
 void BlockingLoop::run(const std::stop_token &stop) {

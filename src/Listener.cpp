@@ -65,6 +65,8 @@ namespace {
 		return Listener{ .socket = std::move(socket), .port = ntohs(bound.sin_port) };
 	}
 
+	bool sIsTransientAcceptError(int error) { return error == EAGAIN || error == EWOULDBLOCK || error == ECONNABORTED || error == EINTR; }
+
 } // namespace
 
 std::expected<Listener, SocketError> openListener(uint16_t port) {
@@ -74,6 +76,14 @@ std::expected<Listener, SocketError> openListener(uint16_t port) {
 	    .and_then(sListen)
 	    .and_then(sNonBlocking)
 	    .and_then(sWithBoundPort);
+}
+
+std::expected<UniqueFd, std::error_code> acceptClient(int listenSocket, sockaddr_in &clientAddr) {
+	socklen_t length = sizeof(clientAddr);
+	UniqueFd client(::accept(listenSocket, reinterpret_cast<struct sockaddr *>(&clientAddr), &length));
+	if (client || sIsTransientAcceptError(errno))
+		return client;
+	return std::unexpected(std::error_code(errno, std::system_category()));
 }
 
 } // namespace ou

@@ -1,14 +1,13 @@
 #include "EventLoop.h"
+#include "Listener.h"
 #include "ou/http/Logging.h"
 
 #include <algorithm>
+#include <expected>
+#include <system_error>
 #include <utility>
 
-#include <sys/socket.h>
-
 namespace {
-
-constexpr auto kPollTimeout = std::chrono::milliseconds(100);
 
 thread_local ou::http::EventLoop *g_currentLoop = nullptr;
 
@@ -55,6 +54,7 @@ void EventLoop::run(const std::stop_token &stop) {
 
 		resumeDueTimers();
 		sweepIdle();
+		resumeAccepting();
 	}
 
 	while (!connections_.empty()) {
@@ -68,21 +68,23 @@ void EventLoop::run(const std::stop_token &stop) {
 void EventLoop::acceptReady() {
 	while (true) {
 		sockaddr_in address{};
-		socklen_t length = sizeof(address);
 
-		UniqueFd client(::accept(config_.listenSocket, reinterpret_cast<struct sockaddr *>(&address), &length));
-		// EAGAIN or a failed accept -> stop
-		if (!client)
+		std::expected<UniqueFd, std::error_code> client = acceptClient(config_.listenSocket, address);
+		if (!client) {
+			logWarn("Failed to accept connection: {}", client.error().message());
+			pauseAccepting();
+			return;
+		}
+		if (!client->valid())
 			return;
 
-		if (!setNonBlocking(client.get(), true))
+		const int clientSocket = client->get();
+		if (!setNonBlocking(clientSocket, true) || !poller_.add(clientSocket, Interest::Read)) {
+			logWarn("Failed to set up connection from {}", addressToString(address));
 			continue;
+		}
 
-		const int clientSocket = client.get();
-		if (!poller_.add(clientSocket, Interest::Read))
-			continue;
-
-		const auto connection = connections_.try_emplace(clientSocket, std::move(client), address, config_.maxRequestBytes).first;
+		const auto connection = connections_.try_emplace(clientSocket, std::move(*client), address, config_.maxRequestBytes).first;
 
 		// Start the handshake now rather than waiting for a wakeup that a TLS client will not send
 		serviceOrClose(connection);
@@ -302,9 +304,23 @@ void EventLoop::sweepIdle() {
 			continue;
 		}
 
-		logWarn("Closing idle connection from {}", addressToString(connection->second.address));
+		const bool midRequest = connection->second.reader.abandon() == RequestReader::Status::Rejected;
+		if (midRequest)
+			logWarn("Closing idle connection from {}", addressToString(connection->second.address));
 		connection = close(connection);
 	}
+}
+
+void EventLoop::pauseAccepting() {
+	if (poller_.remove(config_.listenSocket))
+		acceptPausedUntil_ = std::chrono::steady_clock::now() + kAcceptRetryDelay;
+}
+
+void EventLoop::resumeAccepting() {
+	if (!acceptPausedUntil_ || std::chrono::steady_clock::now() < *acceptPausedUntil_)
+		return;
+	if (poller_.add(config_.listenSocket, Interest::Read))
+		acceptPausedUntil_.reset();
 }
 
 } // namespace ou::http
