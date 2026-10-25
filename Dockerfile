@@ -8,11 +8,9 @@ RUN apt-get update && apt-get install -y \
 	clang-19 \
 	libclang-rt-19-dev \
 	ninja-build \
-	cppcheck \
 	libboost-test-dev \
 	libssl-dev \
 	python3 \
-	python3-pip \
 	wrk \
 	nginx \
 	linux-tools-generic \

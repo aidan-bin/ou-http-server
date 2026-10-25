@@ -1,12 +1,12 @@
-cmake_minimum_required(VERSION 3.20)
-project(ou_http_server)
+cmake_minimum_required(VERSION 3.25)
+project(ou_http_server LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-file(GLOB HTTP_LIB_SOURCES ${CMAKE_SOURCE_DIR}/src/*.cpp ${CMAKE_SOURCE_DIR}/src/*.h ${CMAKE_SOURCE_DIR}/include/ou/http/*.h)
+file(GLOB HTTP_LIB_SOURCES CONFIGURE_DEPENDS ${PROJECT_SOURCE_DIR}/src/*.cpp ${PROJECT_SOURCE_DIR}/src/*.h ${PROJECT_SOURCE_DIR}/include/ou/http/*.h)
 
 add_compile_options(-Wall -Wextra -Werror)
 
@@ -33,15 +33,16 @@ if (CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
 endif()
 
 find_package(OpenSSL REQUIRED)
+find_package(Threads REQUIRED)
 
 add_library(http_lib ${HTTP_LIB_SOURCES})
 add_library(ou::http ALIAS http_lib)
-target_link_libraries(http_lib PRIVATE OpenSSL::SSL OpenSSL::Crypto pthread)
-target_include_directories(http_lib PUBLIC ${CMAKE_SOURCE_DIR}/include PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(http_lib PRIVATE OpenSSL::SSL OpenSSL::Crypto Threads::Threads)
+target_include_directories(http_lib PUBLIC ${PROJECT_SOURCE_DIR}/include PRIVATE ${PROJECT_SOURCE_DIR}/src)
 
 add_library(demo_kvstore STATIC demo/KVStore.cpp)
 target_link_libraries(demo_kvstore PUBLIC ou::http)
-target_include_directories(demo_kvstore PUBLIC ${CMAKE_SOURCE_DIR}/demo)
+target_include_directories(demo_kvstore PUBLIC ${PROJECT_SOURCE_DIR}/demo)
 
 add_executable(ou_http_server demo/main.cpp)
 target_link_libraries(ou_http_server PRIVATE demo_kvstore)
@@ -56,8 +57,8 @@ find_program(CLANG_TIDY_EXECUTABLE NAMES clang-tidy)
 
 if (CLANG_TIDY_EXECUTABLE)
 	get_target_property(TIDY_TEST_SOURCES test_http SOURCES)
-	list(TRANSFORM TIDY_TEST_SOURCES PREPEND ${CMAKE_SOURCE_DIR}/tests/)
-	set(TIDY_SOURCES ${HTTP_LIB_SOURCES} ${CMAKE_SOURCE_DIR}/demo/main.cpp ${CMAKE_SOURCE_DIR}/demo/KVStore.cpp ${TIDY_TEST_SOURCES})
+	list(TRANSFORM TIDY_TEST_SOURCES PREPEND ${PROJECT_SOURCE_DIR}/tests/)
+	set(TIDY_SOURCES ${HTTP_LIB_SOURCES} ${PROJECT_SOURCE_DIR}/demo/main.cpp ${PROJECT_SOURCE_DIR}/demo/KVStore.cpp ${TIDY_TEST_SOURCES})
 	list(FILTER TIDY_SOURCES INCLUDE REGEX "\\.cpp$")
 	
 	if (APPLE)
@@ -67,8 +68,8 @@ if (CLANG_TIDY_EXECUTABLE)
 	endif()
 
 	add_custom_target(tidy
-		COMMAND ${CLANG_TIDY_EXECUTABLE} -p ${CMAKE_BINARY_DIR} --quiet
-			"--header-filter=${CMAKE_SOURCE_DIR}/(src|include|demo|tests)/" ${TIDY_EXTRA_ARGS} ${TIDY_SOURCES}
+		COMMAND ${CLANG_TIDY_EXECUTABLE} -p ${PROJECT_BINARY_DIR} --quiet
+			"--header-filter=${PROJECT_SOURCE_DIR}/(src|include|demo|tests)/" ${TIDY_EXTRA_ARGS} ${TIDY_SOURCES}
 		COMMENT "Running clang-tidy"
 		VERBATIM)
 else()
