@@ -5,6 +5,7 @@
 #include <boost/test/data/test_case.hpp>
 #include <boost/test/unit_test.hpp>
 #include <chrono>
+#include <csignal>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -54,6 +55,18 @@ Server::Config sWithTls(Server::Config config) {
 	return config;
 }
 
+bool sHandshakes(uint16_t port, int minVersion, int maxVersion, const char *ciphers = nullptr) {
+	const std::unique_ptr<SSL_CTX, decltype(&SSL_CTX_free)> ctx{ SSL_CTX_new(TLS_client_method()), &SSL_CTX_free };
+	BOOST_REQUIRE_EQUAL(SSL_CTX_set_min_proto_version(ctx.get(), minVersion), 1);
+	BOOST_REQUIRE_EQUAL(SSL_CTX_set_max_proto_version(ctx.get(), maxVersion), 1);
+	if (ciphers != nullptr)
+		BOOST_REQUIRE_EQUAL(SSL_CTX_set_cipher_list(ctx.get(), ciphers), 1);
+	const Client client(port);
+	const std::unique_ptr<SSL, decltype(&SSL_free)> ssl{ SSL_new(ctx.get()), &SSL_free };
+	SSL_set_fd(ssl.get(), client.fd());
+	return SSL_connect(ssl.get()) == 1;
+}
+
 } // namespace
 
 BOOST_FIXTURE_TEST_SUITE(tls, ServingRoot)
@@ -87,6 +100,19 @@ BOOST_DATA_TEST_CASE(test_tls, bdata::make(kModels), model) {
 		client.send("GET /a.txt HTTP/1.1\r\nHost: x\r\n\r\n");
 	for (const TlsClient &client : clients)
 		BOOST_CHECK(client.receive().ends_with("over tls"));
+}
+
+BOOST_AUTO_TEST_CASE(test_protocol_and_cipher_policy) {
+	(void)std::signal(SIGPIPE, SIG_IGN); // Rejected handshakes write to a peer that already closed
+	const Server server = startServer(sWithTls(config(Server::Model::EventLoop)));
+	const uint16_t port = server.port();
+
+	BOOST_CHECK(sHandshakes(port, TLS1_2_VERSION, TLS1_2_VERSION));
+	BOOST_CHECK(sHandshakes(port, TLS1_3_VERSION, TLS1_3_VERSION));
+
+	// @SECLEVEL=0 lets the client offer weak parameters, so a failure is the server's policy
+	BOOST_CHECK(!sHandshakes(port, TLS1_VERSION, TLS1_1_VERSION, "ALL:@SECLEVEL=0"));
+	BOOST_CHECK(!sHandshakes(port, TLS1_2_VERSION, TLS1_2_VERSION, "AES256-SHA:ECDHE-RSA-AES256-SHA:@SECLEVEL=0"));
 }
 
 BOOST_AUTO_TEST_CASE(test_start_reports_bad_certificate) {
