@@ -253,4 +253,10 @@ Response Response::error(int statusCode) {
 	return plainText(statusCode, std::format("{} {}", statusCode, defaultReasonPhrase(statusCode)));
 }
 
+Response Response::notAllowed(std::string allow) {
+	Response response = error(405);
+	response.headers.emplace("Allow", std::move(allow));
+	return response;
+}
+
 } // namespace ou::http

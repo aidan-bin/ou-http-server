@@ -244,7 +244,9 @@ BOOST_AUTO_TEST_CASE(test_kv_store_methods) {
 
 	BOOST_CHECK_EQUAL(store.handle(makeRequest("/kv"), "my key").body, "value");
 	BOOST_CHECK_EQUAL(store.handle(makeRequest("/kv"), "other").statusCode, 404);
-	BOOST_CHECK_EQUAL(store.handle(makeRequest("/kv", Method::POST), "my key").statusCode, 405);
+	const Response post = store.handle(makeRequest("/kv", Method::POST), "my key");
+	BOOST_CHECK_EQUAL(post.statusCode, 405);
+	BOOST_CHECK_EQUAL(post.headers.at("Allow"), "GET, PUT, DELETE");
 
 	const Request remove = makeRequest("/kv", Method::DELETE);
 	BOOST_CHECK_EQUAL(store.handle(remove, "my key").statusCode, 200);

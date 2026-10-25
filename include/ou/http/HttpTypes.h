@@ -171,6 +171,7 @@ struct Response {
 
 	[[nodiscard]] static Response plainText(int statusCode, std::string body);
 	[[nodiscard]] static Response error(int statusCode);
+	[[nodiscard]] static Response notAllowed(std::string allow);
 };
 
 } // namespace ou::http

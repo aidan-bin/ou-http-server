@@ -49,7 +49,7 @@ Response KVStore::handle(const Request &request, const std::string &key) {
 		}
 		return Response::plainText(404, "Key not found");
 	default:
-		return Response::plainText(405, "Method Not Allowed");
+		return Response::notAllowed("GET, PUT, DELETE");
 	}
 }
 

@@ -39,10 +39,7 @@ ou::http::Response sNotAllowed(const std::set<ou::http::Method> &allowed) {
 	std::string allow;
 	for (const ou::http::Method method : allowed)
 		allow += (allow.empty() ? "" : ", ") + std::string(ou::http::methodToString(method));
-
-	ou::http::Response response = ou::http::Response::error(405);
-	response.headers.emplace("Allow", std::move(allow));
-	return response;
+	return ou::http::Response::notAllowed(std::move(allow));
 }
 
 } // namespace

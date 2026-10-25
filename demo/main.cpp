@@ -26,7 +26,9 @@ public:
 	std::optional<ou::http::Response> process(ou::http::Request &request) final {
 		if (request.method == ou::http::Method::GET || request.method == ou::http::Method::HEAD)
 			return std::nullopt;
-		return ou::http::Response::plainText(405, "Server is read-only");
+		ou::http::Response response = ou::http::Response::notAllowed("GET, HEAD");
+		response.body = "Server is read-only";
+		return response;
 	}
 };
 
