@@ -9,8 +9,6 @@
 #include <mutex>
 #include <string>
 
-#include <netinet/in.h>
-
 namespace ou::http {
 
 // Batches entries and appends them by path on each flush, so a log rotated or removed externally is
@@ -35,7 +33,6 @@ public:
 	void postProcess(const Request &request, Response &response) final;
 
 private:
-	void log(const Request &request, const Response &response, const sockaddr_in &clientAddr);
 	void flushLocked();
 
 	Config config_;

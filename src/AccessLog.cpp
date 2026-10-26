@@ -1,5 +1,6 @@
 #include "ou/http/AccessLog.h"
 
+#include <array>
 #include <chrono>
 #include <ctime>
 #include <format>
@@ -15,8 +16,9 @@ namespace {
 		std::tm tmStruct{};
 		localtime_r(&nowTime, &tmStruct);
 
-		return std::format("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", tmStruct.tm_year + 1900, tmStruct.tm_mon + 1, tmStruct.tm_mday,
-		                   tmStruct.tm_hour, tmStruct.tm_min, tmStruct.tm_sec);
+		std::array<char, sizeof("YYYY-MM-DD HH:MM:SS")> buffer{};
+		(void)std::strftime(buffer.data(), buffer.size(), "%F %T", &tmStruct);
+		return buffer.data();
 	}
 
 	std::string sFormatLogEntry(const Request &request, const Response &response, const sockaddr_in &clientAddr) {
@@ -31,8 +33,11 @@ AccessLog::AccessLog(Config config) : config_(std::move(config)) {}
 
 AccessLog::~AccessLog() { flush(); }
 
-void AccessLog::log(const Request &request, const Response &response, const sockaddr_in &clientAddr) {
-	const std::string entry = sFormatLogEntry(request, response, clientAddr);
+void AccessLog::postProcess(const Request &request, Response &response) {
+	if (!request.clientAddr)
+		return;
+
+	const std::string entry = sFormatLogEntry(request, response, *request.clientAddr);
 	const std::lock_guard<std::mutex> lock(mutex_);
 
 	buffer_ += entry;
@@ -58,12 +63,6 @@ void AccessLog::flushLocked() {
 		logFile << buffer_;
 
 	buffer_.clear();
-}
-
-void AccessLog::postProcess(const Request &request, Response &response) {
-	// Middleware hook to log every request with its final status
-	if (request.clientAddr)
-		log(request, response, *request.clientAddr);
 }
 
 } // namespace ou::http

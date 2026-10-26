@@ -195,7 +195,7 @@ std::optional<std::string_view> Request::header(std::string_view name) const {
 }
 
 std::optional<size_t> Request::contentLength() const {
-	return header("Content-Length").and_then([](std::string_view value) { return parseNumber<size_t>(trim(value)); });
+	return header("Content-Length").and_then([](std::string_view value) { return parseNumber<size_t>(value); });
 }
 
 std::optional<std::string_view> Request::pathParam(size_t index) const {
