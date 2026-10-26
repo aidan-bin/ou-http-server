@@ -83,9 +83,9 @@ ou::http::Router sBuildRouter(const demo::Args &args, ou::http::StaticFiles file
 } // namespace
 
 int main(int argc, char **argv) {
-	try {
-		using namespace ou::http;
+	using namespace ou::http;
 
+	try {
 		const demo::StopSignals stopSignals;
 
 		const demo::Args args(argc, argv);
@@ -105,16 +105,16 @@ int main(int argc, char **argv) {
 		                                                .transform(std::bind_front(sBuildRouter, std::cref(args)))
 		                                                .and_then(std::bind_front(&Server::start, config));
 		if (!server) {
-			ou::logError("{}", server.error().message());
+			log::error("{}", server.error().message());
 			return EXIT_FAILURE;
 		}
 
 		stopSignals.wait();
 
-		ou::logInfo("Exiting");
+		log::info("Exiting");
 		return EXIT_SUCCESS;
 	} catch (const std::exception &e) {
-		ou::logError("Fatal error: {}", e.what());
+		log::error("Fatal error: {}", e.what());
 		return EXIT_FAILURE;
 	}
 }

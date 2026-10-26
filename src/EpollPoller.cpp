@@ -12,7 +12,7 @@
 #include <sys/eventfd.h>
 #include <unistd.h>
 
-namespace ou {
+namespace ou::http {
 
 namespace {
 
@@ -73,6 +73,6 @@ std::span<const ReadyEvent> Poller::wait(std::chrono::milliseconds timeout) {
 	return ready_;
 }
 
-} // namespace ou
+} // namespace ou::http
 
 #endif // __linux__

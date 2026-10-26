@@ -78,7 +78,7 @@ public:
 	}
 
 private:
-	UniqueFd fd_;
+	http::UniqueFd fd_;
 };
 
 // Sends the pieces 20ms apart on a new connection; returns one response

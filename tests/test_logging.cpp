@@ -4,15 +4,17 @@
 #include <string>
 #include <vector>
 
+using namespace ou::http;
+
 BOOST_AUTO_TEST_SUITE(logging)
 
 BOOST_AUTO_TEST_CASE(test_sink_receives_formatted_lines) {
 	std::vector<std::string> lines;
-	ou::setLogSink([&lines](std::string_view line) { lines.emplace_back(line); });
+	log::setSink([&lines](std::string_view line) { lines.emplace_back(line); });
 
-	ou::logInfo("started {}", 1);
-	ou::logWarn("careful");
-	ou::setLogSink({});
+	log::info("started {}", 1);
+	log::warn("careful");
+	log::setSink({});
 
 	BOOST_REQUIRE_EQUAL(lines.size(), 2U);
 	BOOST_CHECK_EQUAL(lines[0], "[INFO] started 1");

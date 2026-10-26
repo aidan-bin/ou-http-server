@@ -227,9 +227,9 @@ void StaticFiles::State::preload() {
 		preloaded.emplace(requestPath, PreloadedFile{ .body = std::move(*body), .contentType = sMimeTypeFor(target.native()) });
 	}
 
-	logInfo("Preloaded {} files ({} bytes)", preloaded.size(), total);
+	log::info("Preloaded {} files ({} bytes)", preloaded.size(), total);
 	if (skipped > 0)
-		logWarn("{} files did not fit in preloadBytes and will be served from disk", skipped);
+		log::warn("{} files did not fit in preloadBytes and will be served from disk", skipped);
 }
 
 std::expected<std::string, int> StaticFiles::State::resolveTarget(const std::string &requestPath) const {
@@ -246,7 +246,7 @@ std::expected<std::string, int> StaticFiles::State::resolveTarget(const std::str
 			return canonical.native();
 	}
 
-	logWarn("Rejected path outside serving directory: {}", requestPath);
+	log::warn("Rejected path outside serving directory: {}", requestPath);
 	return std::unexpected(403);
 }
 
@@ -274,20 +274,20 @@ Response StaticFiles::State::serve(const Request &request) const {
 
 	struct stat targetStatus{};
 	if (!file || ::fstat(file.get(), &targetStatus) < 0) {
-		logError("Failed to open file: {}", *target);
+		log::error("Failed to open file: {}", *target);
 		return Response::error(500);
 	}
 
 	if (S_ISDIR(targetStatus.st_mode)) {
 		if (!config.enableDirectoryIndexing) {
-			logWarn("Directory indexing is disabled, returning 403 Forbidden");
+			log::warn("Directory indexing is disabled, returning 403 Forbidden");
 			return Response::error(403);
 		}
 
 		std::error_code ec;
 		std::string indexHtml = sGenerateDirectoryIndex(request.path, *target, ec);
 		if (ec) {
-			logError("Failed to list directory: {}", *target);
+			log::error("Failed to list directory: {}", *target);
 			return Response::error(500);
 		}
 
@@ -299,7 +299,7 @@ Response StaticFiles::State::serve(const Request &request) const {
 
 	std::optional<std::string> body = sReadFile(file.get(), static_cast<size_t>(targetStatus.st_size));
 	if (!body) {
-		logError("Failed to read file: {}", *target);
+		log::error("Failed to read file: {}", *target);
 		return Response::error(500);
 	}
 

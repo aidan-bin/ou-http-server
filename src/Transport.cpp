@@ -25,8 +25,6 @@ namespace {
 		return std::nullopt;
 	}
 
-	Error sStartError(const SocketError &error) { return { .step = std::string(error.step), .code = error.code }; }
-
 } // namespace
 
 std::expected<std::unique_ptr<Transport>, Error> Transport::start(const Server::Config &config, Dispatch dispatch, Reject reject) {
@@ -43,11 +41,12 @@ std::expected<std::unique_ptr<Transport>, Error> Transport::start(const Server::
 		return std::unexpected(Error{ .step = std::format("initialize socket handler: {}", e.what()), .code = {} });
 	}
 
-	std::expected<Listener, Error> listener = openListener(config.port).transform_error(sStartError);
+	std::expected<Listener, Error> listener = openListener(config.port);
 	if (!listener)
 		return std::unexpected(std::move(listener).error());
 
-	logInfo("Server socket {} bound and listening on port {} with {} threads...", listener->socket.get(), listener->port, config.threadCount);
+	log::info("Server socket {} bound and listening on port {} with {} threads...", listener->socket.get(), listener->port,
+	          config.threadCount);
 	return std::make_unique<Transport>(config, std::move(socketHandler), std::move(*listener), std::move(dispatch), std::move(reject));
 }
 
@@ -62,13 +61,13 @@ Transport::Transport(const Server::Config &config, std::unique_ptr<SocketHandler
 }
 
 Transport::~Transport() {
-	logInfo("Stopping server...");
+	log::info("Stopping server...");
 	if (pool_)
 		pool_->stop();
 	for (std::jthread &thread : threads_)
 		thread.request_stop();
 	threads_.clear();
-	logInfo("Server stopped");
+	log::info("Server stopped");
 }
 
 void Transport::run(const std::stop_token &stop) {

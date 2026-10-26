@@ -10,7 +10,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-namespace ou {
+namespace ou::http {
 
 enum class IoStatus : uint8_t { Ok, WantRead, WantWrite, Closed, Error };
 
@@ -104,4 +104,4 @@ private:
 	static bool wouldBlock() { return errno == EAGAIN || errno == EWOULDBLOCK; }
 };
 
-} // namespace ou
+} // namespace ou::http

@@ -35,7 +35,7 @@ UniqueFd BlockingLoop::acceptOne(sockaddr_in &clientAddr) const {
 
 	std::expected<UniqueFd, std::error_code> client = acceptClient(config_.listenSocket, clientAddr);
 	if (!client) {
-		logWarn("Failed to accept connection: {}", client.error().message());
+		log::warn("Failed to accept connection: {}", client.error().message());
 		std::this_thread::sleep_for(kAcceptRetryDelay);
 		return {};
 	}
@@ -56,9 +56,9 @@ void BlockingLoop::run(const std::stop_token &stop) {
 		try {
 			handleConnection(clientSocket.get(), clientAddr, stop);
 		} catch (const std::exception &e) {
-			logError("Unhandled exception while serving client: {}", e.what());
+			log::error("Unhandled exception while serving client: {}", e.what());
 		} catch (...) {
-			logError("Unhandled exception of unknown type while serving client");
+			log::error("Unhandled exception of unknown type while serving client");
 		}
 
 		socketHandler_.discardSession(clientSocket.get()); // UniqueFd closes the fd

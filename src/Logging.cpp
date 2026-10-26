@@ -5,13 +5,13 @@
 #include <mutex>
 #include <utility>
 
-namespace ou {
+namespace ou::http::log {
 
 namespace {
 
 	struct State {
 		std::mutex mutex;
-		LogSink sink;
+		Sink sink;
 	};
 
 	State &sState() {
@@ -21,13 +21,13 @@ namespace {
 
 } // namespace
 
-void setLogSink(LogSink sink) {
+void setSink(Sink sink) {
 	State &state = sState();
 	const std::lock_guard<std::mutex> lock(state.mutex);
 	state.sink = std::move(sink);
 }
 
-void detail::emit(LogLevel level, const std::string &line) noexcept {
+void detail::emit(Level level, const std::string &line) noexcept {
 	try {
 		State &state = sState();
 		const std::lock_guard<std::mutex> lock(state.mutex);
@@ -36,11 +36,11 @@ void detail::emit(LogLevel level, const std::string &line) noexcept {
 			return;
 		}
 		std::cout << line << '\n';
-		if (level != LogLevel::Info)
+		if (level != Level::Info)
 			std::cout.flush();
 	} catch (...) {
 		(void)std::fputs("[ERROR] Failed to write a log line\n", stderr);
 	}
 }
 
-} // namespace ou
+} // namespace ou::http::log

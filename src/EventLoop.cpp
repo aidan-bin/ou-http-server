@@ -20,17 +20,17 @@ EventLoop::EventLoop(Config config, SocketHandler &socketHandler, Dispatch dispa
 
 void EventLoop::run(const std::stop_token &stop) {
 	if (!poller_.valid()) {
-		logError("Failed to create the event poller");
+		log::error("Failed to create the event poller");
 		return;
 	}
 
 	if (!poller_.add(config_.listenSocket, Interest::Read)) {
-		logError("Failed to watch listening socket {}", config_.listenSocket);
+		log::error("Failed to watch listening socket {}", config_.listenSocket);
 		return;
 	}
 
 	if (pool_ != nullptr && !poller_.enableWake()) {
-		logError("Failed to set up handler pool wakeups");
+		log::error("Failed to set up handler pool wakeups");
 		return;
 	}
 
@@ -71,7 +71,7 @@ void EventLoop::acceptReady() {
 
 		std::expected<UniqueFd, std::error_code> client = acceptClient(config_.listenSocket, address);
 		if (!client) {
-			logWarn("Failed to accept connection: {}", client.error().message());
+			log::warn("Failed to accept connection: {}", client.error().message());
 			pauseAccepting();
 			return;
 		}
@@ -80,7 +80,7 @@ void EventLoop::acceptReady() {
 
 		const int clientSocket = client->get();
 		if (!setNonBlocking(clientSocket, true) || !poller_.add(clientSocket, Interest::Read)) {
-			logWarn("Failed to set up connection from {}", addressToString(address));
+			log::warn("Failed to set up connection from {}", addressToString(address));
 			continue;
 		}
 
@@ -96,9 +96,9 @@ void EventLoop::serviceOrClose(ConnectionMap::iterator connection) {
 	try {
 		keepOpen = service(connection->second);
 	} catch (const std::exception &e) {
-		logError("Unhandled exception while serving client: {}", e.what());
+		log::error("Unhandled exception while serving client: {}", e.what());
 	} catch (...) {
-		logError("Unhandled exception of unknown type while serving client");
+		log::error("Unhandled exception of unknown type while serving client");
 	}
 
 	if (!keepOpen)
@@ -306,7 +306,7 @@ void EventLoop::sweepIdle() {
 
 		const bool midRequest = connection->second.reader.abandon() == RequestReader::Status::Rejected;
 		if (midRequest)
-			logWarn("Closing idle connection from {}", addressToString(connection->second.address));
+			log::warn("Closing idle connection from {}", addressToString(connection->second.address));
 		connection = close(connection);
 	}
 }

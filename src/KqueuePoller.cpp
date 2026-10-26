@@ -10,7 +10,7 @@
 #include <sys/event.h>
 #include <sys/time.h>
 
-namespace ou {
+namespace ou::http {
 
 namespace {
 
@@ -90,6 +90,6 @@ std::span<const ReadyEvent> Poller::wait(std::chrono::milliseconds timeout) {
 	return ready_;
 }
 
-} // namespace ou
+} // namespace ou::http
 
 #endif // kqueue platforms

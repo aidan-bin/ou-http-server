@@ -40,7 +40,7 @@ namespace {
 
 		// Logs and runs the layers' postProcess on a request that never parsed
 		[[nodiscard]] Response reject(int status, const sockaddr_in &clientAddr) const {
-			logWarn("Rejecting request from {} with status {}", addressToString(clientAddr), status);
+			log::warn("Rejecting request from {} with status {}", addressToString(clientAddr), status);
 
 			Request request;
 			request.clientAddr = clientAddr;
@@ -54,7 +54,7 @@ namespace {
 			response.keepAlive = keepAlive;
 
 			if (logRequests_)
-				logInfo("{} -> {}", logLine, response.statusCode);
+				log::info("{} -> {}", logLine, response.statusCode);
 			return response;
 		}
 

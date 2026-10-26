@@ -3,7 +3,7 @@
 #include <unistd.h>
 #include <utility>
 
-namespace ou {
+namespace ou::http {
 
 class UniqueFd {
 public:
@@ -44,4 +44,4 @@ private:
 	int fd_ = kInvalid;
 };
 
-} // namespace ou
+} // namespace ou::http

@@ -3,19 +3,21 @@
 
 #include <cerrno>
 #include <functional>
+#include <string>
+#include <string_view>
 #include <utility>
 
 #include <netinet/in.h>
 #include <sys/socket.h>
 
-namespace ou {
+namespace ou::http {
 
 namespace {
 
-	using Opened = std::expected<UniqueFd, SocketError>;
+	using Opened = std::expected<UniqueFd, Error>;
 
 	// Reads errno, so call it before anything (like closing the socket) can overwrite it
-	SocketError sErrnoError(std::string_view step) { return { .step = step, .code = std::error_code(errno, std::system_category()) }; }
+	Error sErrnoError(std::string_view step) { return { .step = std::string(step), .code = std::error_code(errno, std::system_category()) }; }
 
 	// Passes the socket on if the step's call succeeded
 	Opened sCheck(UniqueFd socket, int result, std::string_view step) {
@@ -57,7 +59,7 @@ namespace {
 		return sCheck(std::move(socket), result, "set socket non-blocking");
 	}
 
-	std::expected<Listener, SocketError> sWithBoundPort(UniqueFd socket) {
+	std::expected<Listener, Error> sWithBoundPort(UniqueFd socket) {
 		sockaddr_in bound{};
 		socklen_t length = sizeof(bound);
 		if (getsockname(socket.get(), reinterpret_cast<struct sockaddr *>(&bound), &length) < 0)
@@ -69,7 +71,7 @@ namespace {
 
 } // namespace
 
-std::expected<Listener, SocketError> openListener(uint16_t port) {
+std::expected<Listener, Error> openListener(uint16_t port) {
 	return sCreate()
 	    .and_then(sReuseAddress)
 	    .and_then(std::bind_front(sBind, port))
@@ -86,4 +88,4 @@ std::expected<UniqueFd, std::error_code> acceptClient(int listenSocket, sockaddr
 	return std::unexpected(std::error_code(errno, std::system_category()));
 }
 
-} // namespace ou
+} // namespace ou::http

@@ -16,16 +16,17 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+using namespace ou::http;
 using namespace std::chrono_literals;
 
 BOOST_AUTO_TEST_SUITE(transport)
 
 BOOST_AUTO_TEST_CASE(test_unique_fd_closes_once) {
-	ou::UniqueFd fd(::open("/dev/null", O_RDONLY));
+	UniqueFd fd(::open("/dev/null", O_RDONLY));
 	BOOST_REQUIRE(fd.valid());
 	const int raw = fd.get();
 
-	ou::UniqueFd moved(std::move(fd));
+	UniqueFd moved(std::move(fd));
 	BOOST_CHECK(moved.valid());
 	// NOLINTNEXTLINE(bugprone-use-after-move) checking the moved-from state is the point
 	BOOST_CHECK(!fd.valid());
@@ -41,38 +42,38 @@ BOOST_AUTO_TEST_CASE(test_unique_fd_closes_once) {
 }
 
 BOOST_AUTO_TEST_CASE(test_accept_tells_transient_errors_from_persistent_ones) {
-	const std::expected<ou::Listener, ou::SocketError> listener = ou::openListener(0);
+	const std::expected<Listener, Error> listener = openListener(0);
 	BOOST_REQUIRE(listener);
 	sockaddr_in clientAddr{};
 
-	const auto none = ou::acceptClient(listener->socket.get(), clientAddr);
+	const auto none = acceptClient(listener->socket.get(), clientAddr);
 	BOOST_REQUIRE(none);
 	BOOST_CHECK(!none->valid());
 
-	const ou::UniqueFd notListening(::socket(AF_INET, SOCK_STREAM, 0));
-	BOOST_CHECK(!ou::acceptClient(notListening.get(), clientAddr));
+	const UniqueFd notListening(::socket(AF_INET, SOCK_STREAM, 0));
+	BOOST_CHECK(!acceptClient(notListening.get(), clientAddr));
 }
 
 BOOST_AUTO_TEST_CASE(test_poller_readiness) {
 	std::array<int, 2> pair{};
 	BOOST_REQUIRE_EQUAL(::socketpair(AF_UNIX, SOCK_STREAM, 0, pair.data()), 0);
-	const ou::UniqueFd local(pair[0]);
-	const ou::UniqueFd peer(pair[1]);
+	const UniqueFd local(pair[0]);
+	const UniqueFd peer(pair[1]);
 
-	ou::Poller poller;
+	Poller poller;
 	BOOST_REQUIRE(poller.valid());
-	BOOST_REQUIRE(poller.add(local.get(), ou::Interest::Read));
+	BOOST_REQUIRE(poller.add(local.get(), Interest::Read));
 
 	BOOST_CHECK(poller.wait(10ms).empty());
 
 	BOOST_REQUIRE_EQUAL(::write(peer.get(), "x", 1), 1);
-	std::span<const ou::ReadyEvent> ready = poller.wait(500ms);
+	std::span<const ReadyEvent> ready = poller.wait(500ms);
 	BOOST_REQUIRE_EQUAL(ready.size(), 1U);
 	BOOST_CHECK_EQUAL(ready[0].fd, local.get());
 	BOOST_CHECK(ready[0].readable);
 
 	// Switching interest hides the still-unread byte and reports the empty send buffer instead
-	BOOST_REQUIRE(poller.modify(local.get(), ou::Interest::Write));
+	BOOST_REQUIRE(poller.modify(local.get(), Interest::Write));
 	ready = poller.wait(500ms);
 	BOOST_REQUIRE_EQUAL(ready.size(), 1U);
 	BOOST_CHECK(ready[0].writable);
@@ -83,7 +84,7 @@ BOOST_AUTO_TEST_CASE(test_poller_readiness) {
 }
 
 BOOST_AUTO_TEST_CASE(test_poller_wake) {
-	ou::Poller poller;
+	Poller poller;
 	BOOST_REQUIRE(poller.enableWake());
 
 	BOOST_CHECK(poller.wait(10ms).empty());
@@ -93,7 +94,7 @@ BOOST_AUTO_TEST_CASE(test_poller_wake) {
 		std::this_thread::sleep_for(50ms);
 		poller.wake();
 	});
-	std::span<const ou::ReadyEvent> ready = poller.wait(5s);
+	std::span<const ReadyEvent> ready = poller.wait(5s);
 	BOOST_CHECK_LT(std::chrono::steady_clock::now() - start, 2s);
 	BOOST_REQUIRE_EQUAL(ready.size(), 1U);
 	BOOST_CHECK(ready[0].woken);

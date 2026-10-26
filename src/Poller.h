@@ -8,7 +8,7 @@
 #include <span>
 #include <vector>
 
-namespace ou {
+namespace ou::http {
 
 enum class Interest : uint8_t { Read, Write };
 
@@ -49,4 +49,4 @@ private:
 	std::vector<ReadyEvent> ready_;
 };
 
-} // namespace ou
+} // namespace ou::http

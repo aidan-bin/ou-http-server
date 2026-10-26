@@ -48,9 +48,9 @@ void HandlerPool::work(const std::stop_token &stop) {
 		try {
 			job();
 		} catch (const std::exception &e) {
-			logError("Unhandled exception in handler pool job: {}", e.what());
+			log::error("Unhandled exception in handler pool job: {}", e.what());
 		} catch (...) {
-			logError("Unhandled exception of unknown type in handler pool job");
+			log::error("Unhandled exception of unknown type in handler pool job");
 		}
 	}
 }

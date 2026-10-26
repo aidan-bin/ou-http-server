@@ -9,7 +9,7 @@
 
 #include <openssl/err.h>
 
-namespace ou {
+namespace ou::http {
 
 namespace {
 
@@ -125,4 +125,4 @@ void SSLSocketHandler::discardSession(int clientSocket) {
 	sDiscardSession(clientSocket);
 }
 
-} // namespace ou
+} // namespace ou::http

@@ -8,7 +8,7 @@
 
 #include <openssl/ssl.h>
 
-namespace ou {
+namespace ou::http {
 
 class SSLSocketHandler final : public SocketHandler {
 public:
@@ -28,4 +28,4 @@ private:
 	SSL_CTX *sslCtx_;
 };
 
-} // namespace ou
+} // namespace ou::http
