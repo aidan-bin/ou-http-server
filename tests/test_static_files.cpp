@@ -61,7 +61,7 @@ BOOST_AUTO_TEST_CASE(test_directory_traversal_is_rejected) {
 	BOOST_CHECK_EQUAL(files(makeRequest("/../secret.txt")).statusCode, 403);
 	BOOST_CHECK_EQUAL(files(makeRequest("/../../etc/passwd")).statusCode, 403);
 	BOOST_CHECK_EQUAL(files(makeRequest("/subdir/../../etc/passwd")).statusCode, 403);
-	BOOST_CHECK_EQUAL(files(parse("GET /..%2Fsecret.txt HTTP/1.1\r\n\r\n")).statusCode, 403);
+	BOOST_CHECK_EQUAL(files(parse("GET /..%2Fsecret.txt HTTP/1.1\r\nHost: x\r\n\r\n")).statusCode, 403);
 }
 
 BOOST_AUTO_TEST_CASE(test_skip_symlink_check_still_blocks_traversal) {
@@ -78,7 +78,7 @@ BOOST_AUTO_TEST_CASE(test_skip_symlink_check_still_blocks_traversal) {
 	BOOST_CHECK_EQUAL(files(makeRequest("//public.txt")).body, "public");
 	BOOST_CHECK_EQUAL(files(makeRequest("/../secret.txt")).statusCode, 403);
 	BOOST_CHECK_EQUAL(files(makeRequest("/subdir/../../secret.txt")).statusCode, 403);
-	BOOST_CHECK_EQUAL(files(parse("GET /..%2Fsecret.txt HTTP/1.1\r\n\r\n")).statusCode, 403);
+	BOOST_CHECK_EQUAL(files(parse("GET /..%2Fsecret.txt HTTP/1.1\r\nHost: x\r\n\r\n")).statusCode, 403);
 }
 
 BOOST_AUTO_TEST_CASE(test_directory_indexing_escapes_names) {

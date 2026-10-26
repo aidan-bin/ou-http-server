@@ -50,11 +50,11 @@ constexpr auto kMalformedRequests = std::to_array<std::string_view>({
 		"GET\r\n\r\n",
 		"GET index.html HTTP/1.1\r\n\r\n",
 		"\r\n\r\n",
-		"GET / HTTP/1.1\r\nNoColonHere\r\n\r\n",
-		"GET / HTTP/1.1\r\n: novalue\r\n\r\n",
-		"GET / HTTP/1.1\r\nContent-Length : 4\r\n\r\nabcd",
-		"GET / HTTP/1.1\r\nContent-Length\t: 4\r\n\r\nabcd",
-		"POST / HTTP/1.1\r\nContent-Length: 1\r\ncontent-length: 2\r\n\r\nab",
+		"GET / HTTP/1.1\r\nHost: x\r\nNoColonHere\r\n\r\n",
+		"GET / HTTP/1.1\r\nHost: x\r\n: novalue\r\n\r\n",
+		"GET / HTTP/1.1\r\nHost: x\r\nContent-Length : 4\r\n\r\nabcd",
+		"GET / HTTP/1.1\r\nHost: x\r\nContent-Length\t: 4\r\n\r\nabcd",
+		"POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 1\r\ncontent-length: 2\r\n\r\nab",
 		"GET / HTTP/\r\n\r\n",
 		"GET / HTTP/1\r\n\r\n",
 		"GET / HTTP/1.10\r\n\r\n",
@@ -84,14 +84,14 @@ BOOST_DATA_TEST_CASE(test_unsupported_versions_are_rejected_with_505, bdata::mak
 }
 
 BOOST_AUTO_TEST_CASE(test_request_headers_are_case_insensitive) {
-	const Request req = parse("GET / HTTP/1.1\r\ncontent-length: 4\r\n\r\nabcd");
+	const Request req = parse("GET / HTTP/1.1\r\nHost: x\r\ncontent-length: 4\r\n\r\nabcd");
 	BOOST_CHECK(req.header("Content-Length").has_value());
 	BOOST_CHECK(req.header("CONTENT-LENGTH").has_value());
 	BOOST_CHECK(req.contentLength() == std::optional<size_t>(4));
 }
 
 BOOST_AUTO_TEST_CASE(test_query_string_is_split_from_path) {
-	const Request req = parse("GET /kv?key=hello&flag HTTP/1.1\r\n\r\n");
+	const Request req = parse("GET /kv?key=hello&flag HTTP/1.1\r\nHost: x\r\n\r\n");
 	BOOST_CHECK_EQUAL(req.path, "/kv");
 	BOOST_CHECK_EQUAL(req.query, "key=hello&flag");
 
@@ -108,9 +108,9 @@ BOOST_AUTO_TEST_CASE(test_percent_decoding) {
 	BOOST_CHECK_EQUAL(percentDecode("%zz"), "%zz");
 	BOOST_CHECK_EQUAL(percentDecode("a+b", false), "a+b");
 
-	BOOST_CHECK_EQUAL(parse("GET /my%20file.txt HTTP/1.1\r\n\r\n").path, "/my file.txt");
+	BOOST_CHECK_EQUAL(parse("GET /my%20file.txt HTTP/1.1\r\nHost: x\r\n\r\n").path, "/my file.txt");
 
-	const Request plus = parse("GET /a+b.txt?q=a+b HTTP/1.1\r\n\r\n");
+	const Request plus = parse("GET /a+b.txt?q=a+b HTTP/1.1\r\nHost: x\r\n\r\n");
 	BOOST_CHECK_EQUAL(plus.path, "/a+b.txt");
 	BOOST_CHECK_EQUAL(parseQuery(plus.query).at("q"), "a b");
 }

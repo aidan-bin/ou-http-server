@@ -63,11 +63,6 @@ RequestReader::Status RequestReader::parseBuffered() {
 			return reject(parsed.error());
 		request_ = std::move(*parsed);
 
-		// HTTP/1.1 requires exactly one Host
-		if (!request_->http10
-		    && std::ranges::count_if(request_->headers, [](const auto &field) { return equalsIgnoreCase(field.first, "Host"); }) != 1)
-			return reject(400);
-
 		// TE with CL is a smuggling vector (RFC 9112 6.1); chunked isn't implemented
 		if (request_->header("Transfer-Encoding"))
 			return reject(request_->header("Content-Length") ? 400 : 501);

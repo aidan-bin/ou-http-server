@@ -178,6 +178,11 @@ std::expected<Request, int> Request::parse(std::string_view head) {
 		request.headers.emplace_back(name, value);
 	}
 
+	// HTTP/1.1 requires exactly one Host
+	if (!request.http10
+	    && std::ranges::count_if(request.headers, [](const auto &field) { return equalsIgnoreCase(field.first, "Host"); }) != 1)
+		return std::unexpected(400);
+
 	return request;
 }
 
