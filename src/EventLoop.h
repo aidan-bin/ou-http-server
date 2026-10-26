@@ -1,8 +1,8 @@
 #pragma once
 
 #include "CompletionQueue.h"
-#include "ConnectionLoop.h"
 #include "HandlerPool.h"
+#include "LoopConfig.h"
 #include "Poller.h"
 #include "RequestReader.h"
 #include "SocketHandler.h"

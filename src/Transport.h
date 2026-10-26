@@ -1,8 +1,8 @@
 #pragma once
 
-#include "ConnectionLoop.h"
 #include "HandlerPool.h"
 #include "Listener.h"
+#include "LoopConfig.h"
 #include "SocketHandler.h"
 #include "UniqueFd.h"
 #include "ou/http/Server.h"

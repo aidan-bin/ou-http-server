@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ConnectionLoop.h"
+#include "LoopConfig.h"
 #include "RequestReader.h"
 #include "SocketHandler.h"
 #include "UniqueFd.h"
