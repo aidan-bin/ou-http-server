@@ -5,8 +5,10 @@
 #include <boost/test/data/test_case.hpp>
 #include <boost/test/unit_test.hpp>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <format>
 #include <memory>
 #include <span>
 #include <string>
@@ -100,6 +102,19 @@ BOOST_DATA_TEST_CASE(test_tls, bdata::make(kModels), model) {
 		client.send("GET /a.txt HTTP/1.1\r\nHost: x\r\n\r\n");
 	for (const TlsClient &client : clients)
 		BOOST_CHECK(client.receive().ends_with("over tls"));
+}
+
+// One TLS record larger than a read chunk: the rest waits in OpenSSL, unseen by the poller
+BOOST_DATA_TEST_CASE(test_tls_request_larger_than_a_read_chunk, bdata::make(kModels), model) {
+	const auto echo = [](const Request &request) {
+		return Response::plainText(200, std::string(request.body));
+	};
+	const Server server = startServer(sWithTls(makeConfig(model)), Router().route("/echo", put(echo)));
+
+	const std::string body(size_t{ 10 } * 1024, 'x');
+	const TlsClient client(server.port());
+	client.send(std::format("PUT /echo HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\n\r\n{}", body.size(), body));
+	BOOST_CHECK(client.receive().ends_with(body));
 }
 
 BOOST_AUTO_TEST_CASE(test_protocol_and_cipher_policy) {

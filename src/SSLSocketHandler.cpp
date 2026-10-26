@@ -34,8 +34,12 @@ namespace {
 		g_sessions.erase(session);
 	}
 
+	// Leaves the thread's error queue empty, or the next SSL_get_error() on this thread misreads it
 	IoResult sStatusFor(SSL *ssl, int result) {
-		switch (SSL_get_error(ssl, result)) {
+		const int error = SSL_get_error(ssl, result);
+		ERR_clear_error();
+
+		switch (error) {
 		case SSL_ERROR_WANT_READ:
 			return { .status = IoStatus::WantRead };
 		case SSL_ERROR_WANT_WRITE:
@@ -102,6 +106,11 @@ IoResult SSLSocketHandler::read(int clientSocket, std::span<char> buffer) {
 	return sStatusFor(ssl, bytesRead);
 }
 
+bool SSLSocketHandler::hasBuffered(int clientSocket) {
+	SSL *ssl = sSession(clientSocket);
+	return ssl != nullptr && SSL_has_pending(ssl) == 1;
+}
+
 IoResult SSLSocketHandler::write(int clientSocket, std::string_view data) {
 	SSL *ssl = sSession(clientSocket);
 	if (ssl == nullptr)
@@ -122,6 +131,7 @@ void SSLSocketHandler::discardSession(int clientSocket) {
 		return;
 
 	SSL_shutdown(ssl);
+	ERR_clear_error();
 	sDiscardSession(clientSocket);
 }
 

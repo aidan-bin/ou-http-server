@@ -144,6 +144,9 @@ bool EventLoop::handleReaderStatus(Connection &connection, RequestReader::Status
 		using enum RequestReader::Status;
 	case NeedMore:
 		connection.state = State::Reading;
+		// Check if TLS still holds data, since the poller would not wake for it
+		if (socketHandler_.hasBuffered(connection.fd.get()))
+			return readFrom(connection);
 		return arm(connection, Interest::Read);
 
 	case Rejected:

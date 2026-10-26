@@ -43,6 +43,12 @@ public:
 
 	virtual IoResult read(int clientSocket, std::span<char> buffer) = 0;
 
+	// Whether read() holds bytes the poller cannot see (TLS)
+	[[nodiscard]] virtual bool hasBuffered(int clientSocket) {
+		(void)clientSocket;
+		return false;
+	}
+
 	// May write less than asked; the caller resumes from result.bytes
 	virtual IoResult write(int clientSocket, std::string_view data) = 0;
 
