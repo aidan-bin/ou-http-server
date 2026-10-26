@@ -7,10 +7,8 @@
 
 #include <concepts>
 #include <functional>
-#include <initializer_list>
 #include <map>
 #include <memory>
-#include <optional>
 #include <regex>
 #include <set>
 #include <string>
@@ -35,17 +33,33 @@ struct AnyHandler {
 	Handler handler;
 };
 
+// A handler for one method of a route, made by get(), put() and so on
+struct MethodHandler {
+	Method method;
+	Handler handler;
+};
+
+inline MethodHandler get(AnyHandler handler) { return { Method::GET, std::move(handler.handler) }; }
+inline MethodHandler head(AnyHandler handler) { return { Method::HEAD, std::move(handler.handler) }; }
+inline MethodHandler post(AnyHandler handler) { return { Method::POST, std::move(handler.handler) }; }
+inline MethodHandler put(AnyHandler handler) { return { Method::PUT, std::move(handler.handler) }; }
+inline MethodHandler patch(AnyHandler handler) { return { Method::PATCH, std::move(handler.handler) }; }
+inline MethodHandler del(AnyHandler handler) { return { Method::DELETE, std::move(handler.handler) }; } // delete is a keyword
+
 // Maps requests to handlers. Built up front, then handed to a Server, which does not change it.
 class Router {
 public:
-	// Re-registering an exact path replaces its handler
-	Router &route(Method method, const std::string &path, AnyHandler handler);
-	Router &route(std::initializer_list<Method> methods, const std::string &path, const AnyHandler &handler);
+	// An exact path, or a pattern if it has {name} segments. Re-registering a method on an exact path replaces its handler.
+	Router &route(const std::string &path, std::same_as<MethodHandler> auto... handlers) {
+		(addRoute(path, std::move(handlers)), ...);
+		return *this;
+	}
 
-	// Patterns accumulate and the first match wins. A pattern with {name} segments matches its other
-	// text literally; one without is a regex.
-	Router &pattern(Method method, const std::string &pattern, AnyHandler handler);
-	Router &pattern(std::initializer_list<Method> methods, const std::string &pattern, const AnyHandler &handler);
+	// A regex, which may also use {name} segments. Patterns are tried in registration order and the first match wins.
+	Router &pattern(const std::string &pattern, std::same_as<MethodHandler> auto... handlers) {
+		(addPattern(pattern, std::move(handlers)), ...);
+		return *this;
+	}
 
 	// Runs for every request, in the order added
 	Router &layer(std::shared_ptr<Middleware> middleware);
@@ -67,6 +81,9 @@ private:
 		std::vector<std::string> names;
 		std::map<Method, Handler> handlers;
 	};
+
+	void addRoute(const std::string &path, MethodHandler handler);
+	void addPattern(const std::string &pattern, MethodHandler handler);
 
 	// Exact path, then pattern; null if none. Stores pattern captures in request, and adds to `allowed` the methods
 	// that the path is routed for but the request's is not

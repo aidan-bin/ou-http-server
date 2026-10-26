@@ -99,7 +99,10 @@ BOOST_AUTO_TEST_CASE(test_access_log_concurrent_writes) {
 BOOST_AUTO_TEST_CASE(test_access_log_records_routed_status) {
 	Router router;
 	router.layer(std::make_shared<AccessLog>(AccessLog::Config{ .path = logPath, .flushBytes = 0 }));
-	router.route({ Method::GET, Method::HEAD }, "/hello", [](const Request &) { return Response::plainText(200, "hi there"); });
+	const auto hello = [](const Request &) {
+		return Response::plainText(200, "hi there");
+	};
+	router.route("/hello", get(hello), head(hello));
 
 	BOOST_CHECK_EQUAL(respond(router, makeRequest("/hello")).body, "hi there");
 	BOOST_CHECK_EQUAL(respond(router, makeRequest("/does-not-exist")).statusCode, 404);

@@ -8,7 +8,6 @@
 #include <chrono>
 #include <expected>
 #include <format>
-#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -23,14 +22,11 @@ static_assert(!IntoResponse<int> && !IntoResponse<std::expected<int, Response>>)
 
 namespace {
 
-class TestMiddleware final : public Middleware {
-public:
-	std::optional<Response> process(Request &request) final {
-		if (request.path == "/middleware")
-			return Response::plainText(200, "Intercepted by Middleware");
-		return std::nullopt;
-	}
-};
+std::optional<Response> sIntercept(Request &request) {
+	if (request.path == "/middleware")
+		return Response::plainText(200, "Intercepted by Middleware");
+	return std::nullopt;
+}
 
 struct RoutingFixture {
 	Router router;
@@ -47,9 +43,9 @@ struct RoutingFixture {
 BOOST_FIXTURE_TEST_SUITE(routing, RoutingFixture)
 
 BOOST_AUTO_TEST_CASE(test_custom_handler_and_middleware) {
-	router.layer(std::make_shared<TestMiddleware>());
-	router.route(Method::GET, "/test", [](const Request &) { return Response::plainText(200, "Handled by TestHandler"); });
-	router.pattern(Method::GET, R"(/pattern/\d+)", [](const Request &) { return Response::plainText(200, "Pattern handler"); });
+	router.layer(before(sIntercept));
+	router.route("/test", get([](const Request &) { return Response::plainText(200, "Handled by TestHandler"); }));
+	router.pattern(R"(/pattern/\d+)", get([](const Request &) { return Response::plainText(200, "Pattern handler"); }));
 
 	BOOST_CHECK_EQUAL(respond(router, makeRequest("/test")).body, "Handled by TestHandler");
 	BOOST_CHECK_EQUAL(respond(router, makeRequest("/middleware")).body, "Intercepted by Middleware");
@@ -58,22 +54,23 @@ BOOST_AUTO_TEST_CASE(test_custom_handler_and_middleware) {
 }
 
 BOOST_AUTO_TEST_CASE(test_fallback_answers_unmatched_requests) {
-	router.route(Method::GET, "/known", [](const Request &) { return Response::plainText(200, "known"); })
-			.fallback([](const Request &request) { return Response::plainText(404, "no " + request.path); });
+	router.route("/known", get([](const Request &) { return Response::plainText(200, "known"); })).fallback([](const Request &request) {
+		return Response::plainText(404, "no " + request.path);
+	});
 
 	BOOST_CHECK_EQUAL(respond(router, makeRequest("/known")).body, "known");
 	BOOST_CHECK_EQUAL(respond(router, makeRequest("/other")).body, "no /other");
 }
 
 BOOST_AUTO_TEST_CASE(test_coroutine_handler_routes_like_any_other) {
-	router.layer(std::make_shared<TestMiddleware>());
+	router.layer(before(sIntercept));
 	const auto napping = [](const Request &) -> Task<Response> {
 		co_await sleepFor(std::chrono::milliseconds(1));
 		co_return Response::plainText(200, "rested");
 	};
-	router.route({ Method::GET, Method::HEAD }, "/nap", napping);
-	router.pattern(Method::GET, R"(/nap/\d+)", napping);
-	router.route(Method::GET, "/middleware", napping);
+	router.route("/nap", get(napping), head(napping));
+	router.pattern(R"(/nap/\d+)", get(napping));
+	router.route("/middleware", get(napping));
 
 	BOOST_CHECK_EQUAL(respond(router, makeRequest("/nap")).body, "rested");
 	BOOST_CHECK_EQUAL(respond(router, makeRequest("/nap/7")).body, "rested");
@@ -82,7 +79,10 @@ BOOST_AUTO_TEST_CASE(test_coroutine_handler_routes_like_any_other) {
 }
 
 BOOST_AUTO_TEST_CASE(test_head_reports_the_length_of_the_get_body) {
-	router.route({ Method::GET, Method::HEAD }, "/hello", [](const Request &) { return Response::plainText(200, "hi there"); });
+	const auto hello = [](const Request &) {
+		return Response::plainText(200, "hi there");
+	};
+	router.route("/hello", get(hello), head(hello));
 
 	const std::string head = respond(router, makeRequest("/hello", Method::HEAD)).serialize();
 	BOOST_CHECK(head.contains("Content-Length: 8\r\n"));
@@ -93,8 +93,8 @@ BOOST_AUTO_TEST_CASE(test_multi_method_registration) {
 	const auto echoMethod = [](const Request &req) {
 		return Response::plainText(200, std::string(methodToString(req.method)));
 	};
-	router.route({ Method::GET, Method::PUT }, "/multi", echoMethod);
-	router.pattern({ Method::GET, Method::DELETE }, R"(/multi/\d+)", echoMethod);
+	router.route("/multi", get(echoMethod), put(echoMethod));
+	router.pattern(R"(/multi/\d+)", get(echoMethod), del(echoMethod));
 
 	BOOST_CHECK_EQUAL(respond(router, makeRequest("/multi", Method::GET)).body, "GET");
 	BOOST_CHECK_EQUAL(respond(router, makeRequest("/multi", Method::PUT)).body, "PUT");
@@ -105,8 +105,8 @@ BOOST_AUTO_TEST_CASE(test_known_path_with_another_method_is_405_with_allow) {
 	const auto ok = [](const Request &) {
 		return Response::plainText(200, "ok");
 	};
-	router.route({ Method::GET, Method::PUT }, "/multi", ok);
-	router.pattern({ Method::GET, Method::DELETE }, R"(/multi/\d+)", ok);
+	router.route("/multi", get(ok), put(ok));
+	router.pattern(R"(/multi/\d+)", get(ok), del(ok));
 	router.fallback([](const Request &) { return Response::plainText(200, "fallback"); });
 
 	const Response exact = respond(router, makeRequest("/multi", Method::POST));
@@ -121,14 +121,9 @@ BOOST_AUTO_TEST_CASE(test_known_path_with_another_method_is_405_with_allow) {
 }
 
 BOOST_AUTO_TEST_CASE(test_layer_may_modify_the_final_response) {
-	class Tagging final : public Middleware {
-	public:
-		void postProcess(const Request & /*request*/, Response &response) final {
-			response.headers.emplace("X-Tag", std::to_string(response.statusCode));
-		}
-	};
-	router.layer(std::make_shared<Tagging>());
-	router.route(Method::GET, "/ok", [](const Request &) { return Response::plainText(200, "ok"); });
+	router.layer(after(
+			[](const Request & /*request*/, Response &response) { response.headers.emplace("X-Tag", std::to_string(response.statusCode)); }));
+	router.route("/ok", get([](const Request &) { return Response::plainText(200, "ok"); }));
 
 	BOOST_CHECK_EQUAL(respond(router, makeRequest("/ok")).headers.at("X-Tag"), "200");
 	BOOST_CHECK_EQUAL(respond(router, makeRequest("/missing")).headers.at("X-Tag"), "404");
@@ -151,11 +146,11 @@ BOOST_AUTO_TEST_CASE(test_query_extractor) {
 }
 
 BOOST_AUTO_TEST_CASE(test_pattern_captures) {
-	router.pattern(Method::GET, R"(/users/(\w+)/posts/(\d+)?)", [](const Request &request) {
-		return Response::plainText(200, std::format("{}|{}|{}", request.pathParam(1).value_or("-"), request.pathParam(2).value_or("-"),
-		                                            request.pathParam(3).value_or("-")));
-	});
-	router.pattern(Method::GET, R"(/id/(\w+))", [](Path<1, int> id) { return Response::plainText(200, std::to_string(id.value)); });
+	router.pattern(R"(/users/(\w+)/posts/(\d+)?)", get([](const Request &request) {
+									 return Response::plainText(200, std::format("{}|{}|{}", request.pathParam(1).value_or("-"),
+		                                                           request.pathParam(2).value_or("-"), request.pathParam(3).value_or("-")));
+								 }));
+	router.pattern(R"(/id/(\w+))", get([](Path<1, int> id) { return Response::plainText(200, std::to_string(id.value)); }));
 
 	BOOST_CHECK_EQUAL(respond(router, makeRequest("/users/ann/posts/7")).body, "ann|7|-");
 	BOOST_CHECK_EQUAL(respond(router, makeRequest("/users/ann/posts/")).body, "ann||-"); // Unmatched group is empty
@@ -164,11 +159,10 @@ BOOST_AUTO_TEST_CASE(test_pattern_captures) {
 }
 
 BOOST_AUTO_TEST_CASE(test_named_segments) {
-	router.pattern(Method::GET, "/users/{user}/posts/{id}.json", [](Path<"user"> user, Path<"id", int> id) {
-		return Response::plainText(200, std::format("{} {}", user.value, id.value));
-	});
-	router.pattern(Method::GET, "/raw/{n}",
-	               [](Path<1> n, Path<"missing"> missing) { return Response::plainText(200, n.value + missing.value); });
+	router.route("/users/{user}/posts/{id}.json", get([](Path<"user"> user, Path<"id", int> id) {
+								 return Response::plainText(200, std::format("{} {}", user.value, id.value));
+							 }));
+	router.pattern("/raw/{n}", get([](Path<1> n, Path<"missing"> missing) { return Response::plainText(200, n.value + missing.value); }));
 
 	BOOST_CHECK_EQUAL(respond(router, makeRequest("/users/ann/posts/7.json")).body, "ann 7");
 	BOOST_CHECK_EQUAL(respond(router, makeRequest("/users/ann/posts/x.json")).body, "Bad path parameter id");
@@ -178,12 +172,13 @@ BOOST_AUTO_TEST_CASE(test_named_segments) {
 }
 
 BOOST_AUTO_TEST_CASE(test_extracting_handler) {
-	router.route(Method::GET, "/add",
-	             [](Query<"a", int> a, Query<"b", int> b) { return Response::plainText(200, std::to_string(a.value + b.value)); });
-	router.route({ Method::GET, Method::PUT }, "/echo", [](const Request &request, Query<"name"> name) -> Task<Response> {
+	router.route("/add",
+	             get([](Query<"a", int> a, Query<"b", int> b) { return Response::plainText(200, std::to_string(a.value + b.value)); }));
+	const auto echo = [](const Request &request, Query<"name"> name) -> Task<Response> {
 		co_await sleepFor(std::chrono::milliseconds(1));
 		co_return Response::plainText(200, std::format("{} {}", request.method, name.value));
-	});
+	};
+	router.route("/echo", get(echo), put(echo));
 
 	BOOST_CHECK_EQUAL(call("/add", "a=2&b=3").body, "5");
 	BOOST_CHECK_EQUAL(call("/add", "a=x&b=y").body, "Missing or bad a parameter"); // First failure wins
@@ -191,14 +186,14 @@ BOOST_AUTO_TEST_CASE(test_extracting_handler) {
 	BOOST_CHECK_EQUAL(call("/echo", "name=ou", Method::PUT).body, "PUT ou");
 	BOOST_CHECK_EQUAL(call("/echo", "").statusCode, 400);
 
-	router.pattern(Method::GET, R"(/scaled/(\d+))",
-	               [](Path<1, int> n, Query<"by", int> by) { return Response::plainText(200, std::to_string(n.value * by.value)); });
+	router.pattern(R"(/scaled/(\d+))",
+	               get([](Path<1, int> n, Query<"by", int> by) { return Response::plainText(200, std::to_string(n.value * by.value)); }));
 	BOOST_CHECK_EQUAL(call("/scaled/3", "by=4").body, "12");
 	BOOST_CHECK_EQUAL(call("/scaled/3", "").statusCode, 400);
 
-	router.route(Method::GET, "/agent", [](Header<"user-agent"> agent, Header<"X-Count", int> count) {
-		return Response::plainText(200, std::format("{} {}", agent.value, count.value));
-	});
+	router.route("/agent", get([](Header<"user-agent"> agent, Header<"X-Count", int> count) {
+								 return Response::plainText(200, std::format("{} {}", agent.value, count.value));
+							 }));
 	Request request = makeRequest("/agent");
 	request.headers = { { "User-Agent", "ou" }, { "X-Count", "3" } };
 	BOOST_CHECK_EQUAL(respond(router, request).body, "ou 3");
@@ -207,16 +202,16 @@ BOOST_AUTO_TEST_CASE(test_extracting_handler) {
 }
 
 BOOST_AUTO_TEST_CASE(test_handler_returns_anything_into_response) {
-	router.route(Method::GET, "/text", [](Query<"name"> name) { return "hi " + name.value; });
-	router.route(Method::GET, "/result", [](Query<"n", int> n) -> std::expected<std::string, Response> {
-		if (n.value < 0)
-			return std::unexpected(Response::error(422));
-		return std::to_string(n.value);
-	});
-	router.route(Method::GET, "/later", [](Query<"name"> name) -> Task<std::string> {
-		co_await sleepFor(std::chrono::milliseconds(1));
-		co_return "hi " + name.value;
-	});
+	router.route("/text", get([](Query<"name"> name) { return "hi " + name.value; }));
+	router.route("/result", get([](Query<"n", int> n) -> std::expected<std::string, Response> {
+								 if (n.value < 0)
+									 return std::unexpected(Response::error(422));
+								 return std::to_string(n.value);
+							 }));
+	router.route("/later", get([](Query<"name"> name) -> Task<std::string> {
+								 co_await sleepFor(std::chrono::milliseconds(1));
+								 co_return "hi " + name.value;
+							 }));
 
 	const Response text = call("/text", "name=ou");
 	BOOST_CHECK_EQUAL(text.statusCode, 200);

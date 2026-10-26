@@ -46,37 +46,24 @@ namespace {
 
 } // namespace
 
-Router &Router::route(Method method, const std::string &path, AnyHandler handler) {
-	pathHandlers_[path][method] = std::move(handler.handler);
-	return *this;
+void Router::addRoute(const std::string &path, MethodHandler handler) {
+	if (path.contains('{'))
+		addPattern(path, std::move(handler));
+	else
+		pathHandlers_[path][handler.method] = std::move(handler.handler);
 }
 
-Router &Router::route(std::initializer_list<Method> methods, const std::string &path, const AnyHandler &handler) {
-	for (const Method method : methods) {
-		route(method, path, handler.handler);
-	}
-	return *this;
-}
-
-Router &Router::pattern(Method method, const std::string &pattern, AnyHandler handler) {
+void Router::addPattern(const std::string &pattern, MethodHandler handler) {
 	const auto existing = std::ranges::find(patternHandlers_, pattern, &PatternRoute::source);
 	if (existing != patternHandlers_.end()) {
-		existing->handlers.emplace(method, std::move(handler.handler));
-		return *this;
+		existing->handlers.emplace(handler.method, std::move(handler.handler));
+		return;
 	}
 
 	auto [regex, names] = sCompileSegments(pattern);
 	PatternRoute route = { .source = pattern, .pattern = std::regex(regex), .names = std::move(names), .handlers = {} };
-	route.handlers.emplace(method, std::move(handler.handler));
+	route.handlers.emplace(handler.method, std::move(handler.handler));
 	patternHandlers_.push_back(std::move(route));
-	return *this;
-}
-
-Router &Router::pattern(std::initializer_list<Method> methods, const std::string &pattern, const AnyHandler &handler) {
-	for (const Method method : methods) {
-		this->pattern(method, pattern, handler.handler);
-	}
-	return *this;
 }
 
 Router &Router::layer(std::shared_ptr<Middleware> middleware) {
