@@ -1,7 +1,8 @@
-Checks: '-*,modernize-*,readability-*,cppcoreguidelines-*,performance-*,bugprone-*,-modernize-use-designated-initializers,-*-magic-numbers,-llvmlibc-callee-namespace,-modernize-use-trailing-return-type,-readability-identifier-length,-readability-braces-around-statements,-cppcoreguidelines-pro-type-reinterpret-cast,-bugprone-easily-swappable-parameters,-cppcoreguidelines-avoid-const-or-ref-data-members,-cppcoreguidelines-avoid-reference-coroutine-parameters,-cppcoreguidelines-pro-type-vararg,-cppcoreguidelines-avoid-non-const-global-variables'
+Checks: '-*,modernize-*,readability-*,cppcoreguidelines-*,performance-*,bugprone-*,-modernize-use-designated-initializers,-*-magic-numbers,-llvmlibc-callee-namespace,-modernize-use-trailing-return-type,-readability-identifier-length,-readability-braces-around-statements,-cppcoreguidelines-pro-type-reinterpret-cast,-bugprone-easily-swappable-parameters,-cppcoreguidelines-avoid-const-or-ref-data-members,-cppcoreguidelines-avoid-reference-coroutine-parameters,-cppcoreguidelines-pro-type-vararg'
 WarningsAsErrors: '*'
 UseColor: true
 CheckOptions:
+  cppcoreguidelines-avoid-non-const-global-variables.AllowInternalLinkage: true
   readability-identifier-naming.NamespaceCase: lower_case
   readability-identifier-naming.ClassCase: CamelCase
   readability-identifier-naming.StructCase: CamelCase
