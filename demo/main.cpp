@@ -11,7 +11,6 @@
 
 #include <algorithm>
 #include <chrono>
-#include <csignal>
 #include <exception>
 #include <expected>
 #include <functional>
@@ -88,7 +87,6 @@ int main(int argc, char **argv) {
 		using namespace ou::http;
 
 		const demo::StopSignals stopSignals;
-		(void)std::signal(SIGPIPE, SIG_IGN); // A peer that disconnects mid-write would otherwise kill the process
 
 		const demo::Args args(argc, argv);
 

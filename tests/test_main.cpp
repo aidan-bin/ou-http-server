@@ -4,7 +4,7 @@
 
 #include <csignal>
 
-// Rejected TLS handshakes write to a peer that already closed
+// Test clients write to connections the server has already closed
 struct IgnoreSigpipe {
 	IgnoreSigpipe() { (void)std::signal(SIGPIPE, SIG_IGN); }
 };

@@ -10,6 +10,9 @@
 #include <optional>
 #include <utility>
 
+#include <csignal>
+#include <pthread.h>
+
 namespace ou::http {
 
 namespace {
@@ -69,6 +72,12 @@ Transport::~Transport() {
 }
 
 void Transport::run(const std::stop_token &stop) {
+	// A write to a closed peer returns EPIPE instead of killing the process
+	sigset_t pipe{};
+	sigemptyset(&pipe);
+	sigaddset(&pipe, SIGPIPE);
+	(void)pthread_sigmask(SIG_BLOCK, &pipe, nullptr);
+
 	if (model_ == Server::Model::EventLoop) {
 		EventLoop loop(loopConfig_, *socketHandler_, dispatch_, reject_, pool_.get());
 		loop.run(stop);
