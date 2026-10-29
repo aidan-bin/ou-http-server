@@ -1,4 +1,4 @@
-#include "SSLSocketHandler.h"
+#include "TlsIo.h"
 
 #include <algorithm>
 #include <array>
@@ -53,8 +53,7 @@ namespace {
 
 } // namespace
 
-SSLSocketHandler::SSLSocketHandler(const std::filesystem::path &certPath, const std::filesystem::path &keyPath)
-		: sslCtx_(SSL_CTX_new(TLS_server_method())) {
+TlsIo::TlsIo(const std::filesystem::path &certPath, const std::filesystem::path &keyPath) : sslCtx_(SSL_CTX_new(TLS_server_method())) {
 	// Minimum TLS 1.2, restricted to ECDHE + AES-GCM ciphers (TLS 1.3 suites are all AEAD, left at default)
 	if ((sslCtx_ == nullptr) || SSL_CTX_set_min_proto_version(sslCtx_, TLS1_2_VERSION) != 1
 	    || SSL_CTX_set_cipher_list(sslCtx_, "ECDHE+AESGCM") != 1 || SSL_CTX_set1_groups_list(sslCtx_, "X25519:prime256v1:secp384r1") != 1
@@ -69,9 +68,9 @@ SSLSocketHandler::SSLSocketHandler(const std::filesystem::path &certPath, const 
 	SSL_CTX_set_mode(sslCtx_, SSL_MODE_RELEASE_BUFFERS);
 }
 
-SSLSocketHandler::~SSLSocketHandler() { SSL_CTX_free(sslCtx_); }
+TlsIo::~TlsIo() { SSL_CTX_free(sslCtx_); }
 
-IoResult SSLSocketHandler::handshake(int clientSocket) {
+IoResult TlsIo::handshake(int clientSocket) {
 	SSL *ssl = sSession(clientSocket);
 	if (ssl == nullptr) {
 		ssl = SSL_new(sslCtx_);
@@ -93,7 +92,7 @@ IoResult SSLSocketHandler::handshake(int clientSocket) {
 	return status;
 }
 
-IoResult SSLSocketHandler::read(int clientSocket, std::span<char> buffer) {
+IoResult TlsIo::read(int clientSocket, std::span<char> buffer) {
 	SSL *ssl = sSession(clientSocket);
 	if (ssl == nullptr)
 		return { .status = IoStatus::Error };
@@ -106,12 +105,12 @@ IoResult SSLSocketHandler::read(int clientSocket, std::span<char> buffer) {
 	return sStatusFor(ssl, bytesRead);
 }
 
-bool SSLSocketHandler::hasBuffered(int clientSocket) {
+bool TlsIo::hasBuffered(int clientSocket) {
 	SSL *ssl = sSession(clientSocket);
 	return ssl != nullptr && SSL_has_pending(ssl) == 1;
 }
 
-IoResult SSLSocketHandler::write(int clientSocket, std::string_view data) {
+IoResult TlsIo::write(int clientSocket, std::string_view data) {
 	SSL *ssl = sSession(clientSocket);
 	if (ssl == nullptr)
 		return { .status = IoStatus::Error };
@@ -125,7 +124,7 @@ IoResult SSLSocketHandler::write(int clientSocket, std::string_view data) {
 	return sStatusFor(ssl, sent);
 }
 
-void SSLSocketHandler::discardSession(int clientSocket) {
+void TlsIo::discardSession(int clientSocket) {
 	SSL *ssl = sSession(clientSocket);
 	if (ssl == nullptr)
 		return;

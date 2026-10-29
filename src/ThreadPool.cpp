@@ -1,4 +1,4 @@
-#include "HandlerPool.h"
+#include "ThreadPool.h"
 #include "ou/http/Logging.h"
 
 #include <exception>
@@ -6,15 +6,15 @@
 
 namespace ou::http {
 
-HandlerPool::HandlerPool(unsigned threadCount) {
+ThreadPool::ThreadPool(unsigned threadCount) {
 	threads_.reserve(threadCount);
 	for (unsigned i = 0; i < threadCount; ++i)
 		threads_.emplace_back([this] { work(stop_.get_token()); });
 }
 
-HandlerPool::~HandlerPool() { stop(); }
+ThreadPool::~ThreadPool() { stop(); }
 
-void HandlerPool::submit(std::function<void()> job) {
+void ThreadPool::submit(std::function<void()> job) {
 	{
 		const std::lock_guard<std::mutex> lock(mutex_);
 		if (stop_.stop_requested())
@@ -24,7 +24,7 @@ void HandlerPool::submit(std::function<void()> job) {
 	ready_.notify_one();
 }
 
-void HandlerPool::stop() {
+void ThreadPool::stop() {
 	{
 		const std::lock_guard<std::mutex> lock(mutex_);
 		jobs_.clear();
@@ -33,7 +33,7 @@ void HandlerPool::stop() {
 	threads_.clear();
 }
 
-void HandlerPool::work(const std::stop_token &stop) {
+void ThreadPool::work(const std::stop_token &stop) {
 	while (true) {
 		std::function<void()> job;
 		{
@@ -48,9 +48,9 @@ void HandlerPool::work(const std::stop_token &stop) {
 		try {
 			job();
 		} catch (const std::exception &e) {
-			log::error("Unhandled exception in handler pool job: {}", e.what());
+			log::error("Unhandled exception in offload pool job: {}", e.what());
 		} catch (...) {
-			log::error("Unhandled exception of unknown type in handler pool job");
+			log::error("Unhandled exception of unknown type in offload pool job");
 		}
 	}
 }

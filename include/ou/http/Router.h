@@ -62,17 +62,17 @@ public:
 	}
 
 	// Runs for every request, in the order added
-	Router &layer(std::shared_ptr<Middleware> middleware);
+	Router &use(std::shared_ptr<Middleware> added);
 
 	// Answers requests that no route matches (404 by default), e.g., with StaticFiles
 	Router &fallback(Handler handler);
 
-	// Layers' process(), then the exact path, then patterns, then 405 if the path has routes for other methods,
-	// then the fallback, then every layer's postProcess(). May finish later if the handler suspends.
+	// Each middleware's before(), then the exact path, then patterns, then 405 if the path has routes for other methods,
+	// then the fallback, then every middleware's after(). May finish later if the handler suspends.
 	[[nodiscard]] Task<Response> handle(Request &request) const;
 
-	// Runs every layer's postProcess() and drops the body for HEAD; for a response with no routed request
-	[[nodiscard]] Response postProcess(const Request &request, Response response) const;
+	// Runs every middleware's after() and drops the body for HEAD; for a response with no routed request
+	[[nodiscard]] Response runAfter(const Request &request, Response response) const;
 
 private:
 	struct PatternRoute {
@@ -89,7 +89,7 @@ private:
 	// that the path is routed for but the request's is not
 	[[nodiscard]] const Handler *handlerFor(Request &request, std::set<Method> &allowed) const;
 	[[nodiscard]] Task<Response> dispatch(Request &request) const;
-	[[nodiscard]] Task<Response> postProcessLater(Task<Response> handled, const Request &request) const;
+	[[nodiscard]] Task<Response> runAfterLater(Task<Response> handled, const Request &request) const;
 
 	// Exact paths are looked up; patterns are tried in registration order
 	std::map<std::string, std::map<Method, Handler>> pathHandlers_;
@@ -97,7 +97,7 @@ private:
 	Handler fallback_ = [](const Request &) {
 		return Response::error(404);
 	};
-	std::vector<std::shared_ptr<Middleware>> layers_;
+	std::vector<std::shared_ptr<Middleware>> middleware_;
 };
 
 } // namespace ou::http

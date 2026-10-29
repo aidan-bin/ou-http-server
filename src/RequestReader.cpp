@@ -28,14 +28,14 @@ RequestReader::Status RequestReader::consume(std::string_view bytes) {
 	return parseBuffered();
 }
 
-RequestReader::Status RequestReader::abandon() noexcept { return raw_.empty() ? Status::NeedMore : reject(408); }
+RequestReader::Status RequestReader::endOfInput() noexcept { return raw_.empty() ? Status::NeedMore : reject(408); }
 
-RequestReader::Status RequestReader::reset() {
+RequestReader::Status RequestReader::next() {
 	// Keep any pipelined bytes after the finished request and parse them now
-	raw_.erase(0, std::min(totalSize_, raw_.size()));
-	searched_ = 0;
+	raw_.erase(0, std::min(requestEnd_, raw_.size()));
+	scanFrom_ = 0;
 	bodyStart_ = std::string::npos;
-	totalSize_ = 0;
+	requestEnd_ = 0;
 	request_.reset();
 
 	return parseBuffered();
@@ -49,9 +49,9 @@ RequestReader::Status RequestReader::parseBuffered() {
 		return reject(413);
 
 	if (bodyStart_ == std::string::npos) {
-		const size_t headerEnd = raw_.find(kHeaderTerminator, searched_);
+		const size_t headerEnd = raw_.find(kHeaderTerminator, scanFrom_);
 		if (headerEnd == std::string::npos) {
-			searched_ = raw_.size() - std::min(raw_.size(), kHeaderTerminator.size() - 1);
+			scanFrom_ = raw_.size() - std::min(raw_.size(), kHeaderTerminator.size() - 1);
 			return Status::NeedMore;
 		}
 		bodyStart_ = headerEnd + kHeaderTerminator.size();
@@ -73,10 +73,10 @@ RequestReader::Status RequestReader::parseBuffered() {
 
 		if (contentLength.value_or(0) > maxRequestBytes_ - bodyStart_)
 			return reject(413);
-		totalSize_ = bodyStart_ + contentLength.value_or(0);
+		requestEnd_ = bodyStart_ + contentLength.value_or(0);
 	}
 
-	return raw_.size() < totalSize_ ? Status::NeedMore : Status::Complete;
+	return raw_.size() < requestEnd_ ? Status::NeedMore : Status::Complete;
 }
 
 std::expected<Request, int> RequestReader::parseHead() const {
@@ -87,8 +87,8 @@ Request RequestReader::take() {
 	if (!request_)
 		return {};
 
-	// Whatever follows the body (given by Content-Length) stays in raw_ for reset()
-	request_->body = std::string_view(raw_).substr(bodyStart_, totalSize_ - bodyStart_);
+	// Whatever follows the body (given by Content-Length) stays in raw_ for next()
+	request_->body = std::string_view(raw_).substr(bodyStart_, requestEnd_ - bodyStart_);
 
 	return std::move(*request_);
 }

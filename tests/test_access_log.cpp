@@ -29,8 +29,8 @@ BOOST_FIXTURE_TEST_SUITE(access_log, AccessLogFixture)
 BOOST_AUTO_TEST_CASE(test_access_log_middleware) {
 	AccessLog accessLog(AccessLog::Config{ .path = logPath, .flushBytes = 0 });
 
-	BOOST_CHECK(!accessLog.process(request));
-	accessLog.postProcess(request, response);
+	BOOST_CHECK(!accessLog.before(request));
+	accessLog.after(request, response);
 
 	const std::vector<std::string> logged = lines(logPath);
 	BOOST_REQUIRE_EQUAL(logged.size(), 1U);
@@ -41,7 +41,7 @@ BOOST_AUTO_TEST_CASE(test_access_log_middleware) {
 	// A request with no client address is not logged
 	Request anonymous;
 	anonymous.path = "/anonymous";
-	accessLog.postProcess(anonymous, response);
+	accessLog.after(anonymous, response);
 	BOOST_CHECK_EQUAL(lines(logPath).size(), 1U);
 }
 
@@ -50,19 +50,19 @@ BOOST_AUTO_TEST_CASE(test_access_log_buffers_until_flushed) {
 		AccessLog accessLog(AccessLog::Config{ .path = logPath, .flushBytes = size_t{ 64 } * 1024, .flushInterval = std::chrono::hours(1) });
 
 		for (int i = 0; i < 10; ++i)
-			accessLog.postProcess(request, response);
+			accessLog.after(request, response);
 		BOOST_CHECK(!std::filesystem::exists(logPath));
 
 		accessLog.flush();
 		BOOST_CHECK_EQUAL(lines(logPath).size(), 10U);
 
 		std::filesystem::remove(logPath);
-		accessLog.postProcess(request, response);
+		accessLog.after(request, response);
 		accessLog.flush();
 		BOOST_CHECK_EQUAL(lines(logPath).size(), 1U);
 
 		std::filesystem::remove(logPath);
-		accessLog.postProcess(request, response);
+		accessLog.after(request, response);
 		BOOST_CHECK(!std::filesystem::exists(logPath));
 	}
 
@@ -73,7 +73,7 @@ BOOST_AUTO_TEST_CASE(test_access_log_flushes_when_buffer_fills) {
 	AccessLog accessLog(AccessLog::Config{ .path = logPath, .flushBytes = 16, .flushInterval = std::chrono::hours(1) });
 
 	for (int i = 0; i < 3; ++i)
-		accessLog.postProcess(request, response);
+		accessLog.after(request, response);
 
 	BOOST_CHECK_EQUAL(lines(logPath).size(), 3U);
 }
@@ -88,7 +88,7 @@ BOOST_AUTO_TEST_CASE(test_access_log_concurrent_writes) {
 	for (int i = 0; i < kThreadCount; ++i) {
 		threads.emplace_back([this, &accessLog]() {
 			for (int j = 0; j < kPerThread; ++j)
-				accessLog.postProcess(request, response);
+				accessLog.after(request, response);
 		});
 	}
 	threads.clear();
@@ -98,7 +98,7 @@ BOOST_AUTO_TEST_CASE(test_access_log_concurrent_writes) {
 
 BOOST_AUTO_TEST_CASE(test_access_log_records_routed_status) {
 	Router router;
-	router.layer(std::make_shared<AccessLog>(AccessLog::Config{ .path = logPath, .flushBytes = 0 }));
+	router.use(std::make_shared<AccessLog>(AccessLog::Config{ .path = logPath, .flushBytes = 0 }));
 	const auto hello = [](const Request &) {
 		return Response::plainText(200, "hi there");
 	};

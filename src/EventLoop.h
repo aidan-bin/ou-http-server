@@ -1,11 +1,11 @@
 #pragma once
 
 #include "CompletionQueue.h"
-#include "HandlerPool.h"
 #include "LoopConfig.h"
 #include "Poller.h"
 #include "RequestReader.h"
-#include "SocketHandler.h"
+#include "SocketIo.h"
+#include "ThreadPool.h"
 #include "UniqueFd.h"
 #include "ou/http/HttpTypes.h"
 #include "ou/http/Task.h"
@@ -32,7 +32,7 @@ class EventLoop {
 public:
 	using Config = LoopConfig;
 
-	EventLoop(Config config, SocketHandler &socketHandler, Dispatch dispatch, Reject reject, HandlerPool *pool = nullptr);
+	EventLoop(Config config, SocketIo &io, Dispatch dispatch, Reject reject, ThreadPool *pool = nullptr);
 
 	// Returns within one poll timeout of a stop request
 	void run(const std::stop_token &stop);
@@ -43,8 +43,8 @@ public:
 	// Resumes the running request's coroutine at deadline; dropped if the request ends first
 	void resumeAt(std::chrono::steady_clock::time_point deadline, std::coroutine_handle<> coroutine);
 
-	// Runs work on the handler pool, then resumes the running request's coroutine here; needs hasPool()
-	void resumeAfter(std::function<void()> work, std::coroutine_handle<> coroutine);
+	// Runs work on the offload pool, then resumes the running request's coroutine here; needs hasPool()
+	void offloadThenResume(std::function<void()> work, std::coroutine_handle<> coroutine);
 
 	[[nodiscard]] bool hasPool() const noexcept { return pool_ != nullptr; }
 
@@ -112,10 +112,10 @@ private:
 	void resumeAccepting();
 
 	Config config_;
-	SocketHandler &socketHandler_;
+	SocketIo &io_;
 	Dispatch dispatch_;
 	Reject reject_;
-	HandlerPool *pool_;
+	ThreadPool *pool_;
 
 	Poller poller_;
 	CompletionQueue completions_{ poller_ };

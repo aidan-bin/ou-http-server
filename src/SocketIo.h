@@ -28,14 +28,14 @@ inline bool setNonBlocking(int fd, bool enable) {
 	return ::fcntl(fd, F_SETFL, updated) >= 0;
 }
 
-class SocketHandler {
+class SocketIo {
 public:
-	SocketHandler() = default;
-	SocketHandler(const SocketHandler &) = delete;
-	SocketHandler &operator=(const SocketHandler &) = delete;
-	SocketHandler(SocketHandler &&) = delete;
-	SocketHandler &operator=(SocketHandler &&) = delete;
-	virtual ~SocketHandler() = default;
+	SocketIo() = default;
+	SocketIo(const SocketIo &) = delete;
+	SocketIo &operator=(const SocketIo &) = delete;
+	SocketIo(SocketIo &&) = delete;
+	SocketIo &operator=(SocketIo &&) = delete;
+	virtual ~SocketIo() = default;
 
 	// Call once per new connection before reading; a no-op for plain sockets.
 	// A TLS handshake still in flight reports WantRead/WantWrite and resumes on the next call.
@@ -71,7 +71,7 @@ public:
 	}
 };
 
-class PlainSocketHandler final : public SocketHandler {
+class PlainIo final : public SocketIo {
 public:
 	IoResult handshake(int clientSocket) final {
 		(void)clientSocket;

@@ -11,14 +11,14 @@
 namespace ou::http {
 
 // Thread pool to run handlers on (so they don't block the event loop)
-class HandlerPool {
+class ThreadPool {
 public:
-	explicit HandlerPool(unsigned threadCount);
-	HandlerPool(const HandlerPool &) = delete;
-	HandlerPool &operator=(const HandlerPool &) = delete;
-	HandlerPool(HandlerPool &&) = delete;
-	HandlerPool &operator=(HandlerPool &&) = delete;
-	~HandlerPool();
+	explicit ThreadPool(unsigned threadCount);
+	ThreadPool(const ThreadPool &) = delete;
+	ThreadPool &operator=(const ThreadPool &) = delete;
+	ThreadPool(ThreadPool &&) = delete;
+	ThreadPool &operator=(ThreadPool &&) = delete;
+	~ThreadPool();
 
 	// Queues job for a pool thread; dropped after stop()
 	void submit(std::function<void()> job);

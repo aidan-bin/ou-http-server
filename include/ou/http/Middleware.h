@@ -9,6 +9,7 @@
 
 namespace ou::http {
 
+// Wraps routing: before() sees each request first, after() sees each final response
 class Middleware {
 public:
 	Middleware() = default;
@@ -19,38 +20,38 @@ public:
 	virtual ~Middleware() = default;
 
 	// Runs before routing. Return a response to answer with it and skip routing; may modify `request`
-	virtual std::optional<Response> process(Request & /*request*/) { return std::nullopt; }
+	virtual std::optional<Response> before(Request & /*request*/) { return std::nullopt; }
 
 	// Runs after every request (including short-circuited and rejected ones); may modify the final `response`
-	virtual void postProcess(const Request & /*request*/, Response & /*response*/) {}
+	virtual void after(const Request & /*request*/, Response & /*response*/) {}
 };
 
-// A layer whose process() is `process`
+// A middleware whose before() is `hook`
 template <std::invocable<Request &> F>
-std::shared_ptr<Middleware> before(F process) {
+std::shared_ptr<Middleware> before(F hook) {
 	class Before final : public Middleware {
 	public:
-		explicit Before(F process) : process_(std::move(process)) {}
-		std::optional<Response> process(Request &request) final { return process_(request); }
+		explicit Before(F hook) : hook_(std::move(hook)) {}
+		std::optional<Response> before(Request &request) final { return hook_(request); }
 
 	private:
-		F process_;
+		F hook_;
 	};
-	return std::make_shared<Before>(std::move(process));
+	return std::make_shared<Before>(std::move(hook));
 }
 
-// A layer whose postProcess() is `postProcess`
+// A middleware whose after() is `hook`
 template <std::invocable<const Request &, Response &> F>
-std::shared_ptr<Middleware> after(F postProcess) {
+std::shared_ptr<Middleware> after(F hook) {
 	class After final : public Middleware {
 	public:
-		explicit After(F postProcess) : postProcess_(std::move(postProcess)) {}
-		void postProcess(const Request &request, Response &response) final { postProcess_(request, response); }
+		explicit After(F hook) : hook_(std::move(hook)) {}
+		void after(const Request &request, Response &response) final { hook_(request, response); }
 
 	private:
-		F postProcess_;
+		F hook_;
 	};
-	return std::make_shared<After>(std::move(postProcess));
+	return std::make_shared<After>(std::move(hook));
 }
 
 } // namespace ou::http

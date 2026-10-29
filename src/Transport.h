@@ -1,9 +1,9 @@
 #pragma once
 
-#include "HandlerPool.h"
 #include "Listener.h"
 #include "LoopConfig.h"
-#include "SocketHandler.h"
+#include "SocketIo.h"
+#include "ThreadPool.h"
 #include "UniqueFd.h"
 #include "ou/http/Server.h"
 
@@ -16,7 +16,7 @@
 namespace ou::http {
 
 // Accepts connections and moves bytes for one start-to-stop cycle; knows nothing about routes or files.
-// Owns the listening socket, the plain or TLS socket handler, one connection loop per thread, and the
+// Owns the listening socket, the plain or TLS socket I/O, one connection loop per thread, and the
 // event-loop model's offload pool (stopped for good, so it lives and dies with the loops that use it).
 class Transport {
 public:
@@ -25,14 +25,13 @@ public:
 	                                                                            Reject reject);
 
 	// Use start(): this takes the resources it has already opened
-	Transport(const Server::Config &config, std::unique_ptr<SocketHandler> socketHandler, Listener listener, Dispatch dispatch,
-	          Reject reject);
+	Transport(const Server::Config &config, std::unique_ptr<SocketIo> io, Listener listener, Dispatch dispatch, Reject reject);
 	Transport(const Transport &) = delete;
 	Transport &operator=(const Transport &) = delete;
 	Transport(Transport &&) = delete;
 	Transport &operator=(Transport &&) = delete;
 
-	// Stops the handler pool first, then the loops, then closes the listening socket
+	// Stops the offload pool first, then the loops, then closes the listening socket
 	~Transport();
 
 	[[nodiscard]] uint16_t port() const noexcept { return port_; }
@@ -42,8 +41,8 @@ private:
 
 	UniqueFd listenSocket_; // Shared by every loop
 	uint16_t port_;
-	std::unique_ptr<SocketHandler> socketHandler_;
-	std::unique_ptr<HandlerPool> pool_; // Event loop only
+	std::unique_ptr<SocketIo> io_;
+	std::unique_ptr<ThreadPool> pool_; // Event loop only
 	Dispatch dispatch_;
 	Reject reject_;
 	Server::Model model_;

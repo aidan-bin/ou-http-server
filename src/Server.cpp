@@ -27,7 +27,7 @@ namespace {
 		[[nodiscard]] Task<Response> serve(Request &request, const sockaddr_in &clientAddr) const {
 			request.clientAddr = clientAddr;
 
-			// Taken before handling; middlewares may rewrite the request
+			// Taken before handling; middleware may rewrite the request
 			const bool keepAlive = keepAlive_ && request.wantsKeepAlive();
 			std::string logLine
 					= logRequests_ ? std::format("{} {} from {}", request.method, request.path, addressToString(clientAddr)) : std::string();
@@ -38,14 +38,14 @@ namespace {
 			return finalizeLater(std::move(handled), keepAlive, std::move(logLine));
 		}
 
-		// Logs and runs the layers' postProcess on a request that never parsed
+		// Logs and runs every middleware's after() on a request that never parsed
 		[[nodiscard]] Response reject(int status, const sockaddr_in &clientAddr) const {
 			log::warn("Rejecting request from {} with status {}", addressToString(clientAddr), status);
 
 			Request request;
 			request.clientAddr = clientAddr;
 
-			return router_.postProcess(request, Response::error(status));
+			return router_.runAfter(request, Response::error(status));
 		}
 
 	private:

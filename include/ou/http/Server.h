@@ -16,7 +16,7 @@ class Transport;
 
 class Server {
 public:
-	enum class Model : uint8_t { ThreadPerCore, EventLoop };
+	enum class Model : uint8_t { ThreadPerConnection, EventLoop };
 
 	struct TlsConfig {
 		bool enabled = false;
@@ -37,12 +37,12 @@ public:
 		bool keepAlive = true;
 
 		// (Event loop only) Threads for offload() work; 0 runs it inline
-		unsigned handlerThreads = 0;
+		unsigned offloadThreads = 0;
 
 		// One console line per routed request
 		bool logRequests = true;
 
-		TlsConfig https;
+		TlsConfig tls;
 	};
 
 	// Fails on a config that could never serve or a port that cannot be opened; takes ownership of the router
@@ -53,7 +53,7 @@ public:
 	Server(Server &&) noexcept;
 	Server &operator=(Server &&) = delete;
 
-	// Stops the handler pool first, then the loops, then closes the listening socket
+	// Stops the offload pool first, then the loops, then closes the listening socket
 	~Server();
 
 	[[nodiscard]] uint16_t port() const noexcept;

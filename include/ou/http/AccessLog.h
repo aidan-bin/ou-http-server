@@ -30,7 +30,7 @@ public:
 
 	void flush();
 
-	void postProcess(const Request &request, Response &response) final;
+	void after(const Request &request, Response &response) final;
 
 private:
 	void flushLocked();

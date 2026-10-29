@@ -18,7 +18,7 @@ namespace detail {
 	[[nodiscard]] bool onEventLoop() noexcept;
 	[[nodiscard]] bool canOffload() noexcept;
 	void resumeAt(std::chrono::steady_clock::time_point deadline, std::coroutine_handle<> coroutine);
-	void resumeAfter(std::function<void()> work, std::coroutine_handle<> coroutine);
+	void offloadThenResume(std::function<void()> work, std::coroutine_handle<> coroutine);
 
 } // namespace detail
 
@@ -42,7 +42,7 @@ private:
 	std::chrono::steady_clock::time_point deadline_;
 };
 
-// Runs work on the handler pool and resumes the handler with its result (runs inline if not on an event loop)
+// Runs work on the offload pool and resumes the handler with its result (runs inline if not on an event loop)
 template <typename R>
 class OffloadAwaiter {
 public:
@@ -57,7 +57,7 @@ public:
 	}
 
 	void await_suspend(std::coroutine_handle<> coroutine) {
-		detail::resumeAfter([work = std::move(work_), result = result_] { run(work, *result); }, coroutine);
+		detail::offloadThenResume([work = std::move(work_), result = result_] { run(work, *result); }, coroutine);
 	}
 
 	[[nodiscard]] R await_resume() {

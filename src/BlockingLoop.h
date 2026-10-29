@@ -2,7 +2,7 @@
 
 #include "LoopConfig.h"
 #include "RequestReader.h"
-#include "SocketHandler.h"
+#include "SocketIo.h"
 #include "UniqueFd.h"
 
 #include <stop_token>
@@ -17,7 +17,7 @@ class BlockingLoop {
 public:
 	using Config = LoopConfig;
 
-	BlockingLoop(Config config, SocketHandler &socketHandler, Dispatch dispatch, Reject reject);
+	BlockingLoop(Config config, SocketIo &io, Dispatch dispatch, Reject reject);
 
 	// Returns within one accept poll timeout of a stop request
 	void run(const std::stop_token &stop);
@@ -34,7 +34,7 @@ private:
 	[[nodiscard]] RequestReader::Status readRequest(int clientSocket, RequestReader &reader) const;
 
 	Config config_;
-	SocketHandler &socketHandler_;
+	SocketIo &io_;
 	Dispatch dispatch_;
 	Reject reject_;
 };

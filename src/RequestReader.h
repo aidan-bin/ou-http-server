@@ -24,17 +24,17 @@ public:
 	Status consume(std::string_view bytes);
 
 	// The peer stopped sending: a clean close between requests, or a 408 mid-request
-	Status abandon() noexcept;
+	Status endOfInput() noexcept;
 
 	// The status code to answer with; only meaningful after Rejected
 	[[nodiscard]] int rejectStatus() const noexcept { return rejectStatus_; }
 
 	// Moves the request out; only valid after Complete.
-	// Its views last until the next consume() or reset().
+	// Its views last until the next consume() or next().
 	[[nodiscard]] Request take();
 
 	// Drops the finished request and reports on whatever followed it
-	Status reset();
+	Status next();
 
 private:
 	Status reject(int status) noexcept;
@@ -44,9 +44,9 @@ private:
 
 	size_t maxRequestBytes_;
 	std::string raw_;
-	size_t searched_ = 0;
+	size_t scanFrom_ = 0;
 	size_t bodyStart_ = std::string::npos;
-	size_t totalSize_ = 0;
+	size_t requestEnd_ = 0;
 	int rejectStatus_ = 400;
 	std::optional<Request> request_;
 };

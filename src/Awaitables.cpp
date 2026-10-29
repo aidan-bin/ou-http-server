@@ -19,8 +19,8 @@ void resumeAt(std::chrono::steady_clock::time_point deadline, std::coroutine_han
 	EventLoop::current()->resumeAt(deadline, coroutine);
 }
 
-void resumeAfter(std::function<void()> work, std::coroutine_handle<> coroutine) {
-	EventLoop::current()->resumeAfter(std::move(work), coroutine);
+void offloadThenResume(std::function<void()> work, std::coroutine_handle<> coroutine) {
+	EventLoop::current()->offloadThenResume(std::move(work), coroutine);
 }
 
 } // namespace ou::http::detail

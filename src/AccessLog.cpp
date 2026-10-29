@@ -33,7 +33,7 @@ AccessLog::AccessLog(Config config) : config_(std::move(config)) {}
 
 AccessLog::~AccessLog() { flush(); }
 
-void AccessLog::postProcess(const Request &request, Response &response) {
+void AccessLog::after(const Request &request, Response &response) {
 	if (!request.clientAddr)
 		return;
 

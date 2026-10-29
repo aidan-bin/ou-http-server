@@ -15,8 +15,8 @@ namespace {
 
 } // namespace
 
-EventLoop::EventLoop(Config config, SocketHandler &socketHandler, Dispatch dispatch, Reject reject, HandlerPool *pool)
-		: config_(config), socketHandler_(socketHandler), dispatch_(std::move(dispatch)), reject_(std::move(reject)), pool_(pool) {}
+EventLoop::EventLoop(Config config, SocketIo &io, Dispatch dispatch, Reject reject, ThreadPool *pool)
+		: config_(config), io_(io), dispatch_(std::move(dispatch)), reject_(std::move(reject)), pool_(pool) {}
 
 void EventLoop::run(const std::stop_token &stop) {
 	if (!poller_.valid()) {
@@ -30,7 +30,7 @@ void EventLoop::run(const std::stop_token &stop) {
 	}
 
 	if (pool_ != nullptr && !poller_.enableWake()) {
-		log::error("Failed to set up handler pool wakeups");
+		log::error("Failed to set up offload pool wakeups");
 		return;
 	}
 
@@ -123,7 +123,7 @@ bool EventLoop::service(Connection &connection) {
 }
 
 bool EventLoop::handshake(Connection &connection) {
-	const IoStatus status = socketHandler_.handshake(connection.fd.get()).status;
+	const IoStatus status = io_.handshake(connection.fd.get()).status;
 	if (status != IoStatus::Ok)
 		return rearm(connection, status);
 
@@ -132,7 +132,7 @@ bool EventLoop::handshake(Connection &connection) {
 }
 
 bool EventLoop::readFrom(Connection &connection) {
-	const IoResult result = socketHandler_.read(connection.fd.get(), scratch_);
+	const IoResult result = io_.read(connection.fd.get(), scratch_);
 	if (result.status != IoStatus::Ok)
 		return rearm(connection, result.status);
 
@@ -145,7 +145,7 @@ bool EventLoop::handleReaderStatus(Connection &connection, RequestReader::Status
 	case NeedMore:
 		connection.state = State::Reading;
 		// Check if TLS still holds data, since the poller would not wake for it
-		if (socketHandler_.hasBuffered(connection.fd.get()))
+		if (io_.hasBuffered(connection.fd.get()))
 			return readFrom(connection);
 		return arm(connection, Interest::Read);
 
@@ -191,7 +191,7 @@ bool EventLoop::writeTo(Connection &connection) {
 	while (connection.written < connection.outBuffer.size()) {
 		const std::string_view remaining = std::string_view(connection.outBuffer).substr(connection.written);
 
-		const IoResult result = socketHandler_.write(connection.fd.get(), remaining);
+		const IoResult result = io_.write(connection.fd.get(), remaining);
 		connection.written += result.bytes;
 
 		if (result.status != IoStatus::Ok)
@@ -205,7 +205,7 @@ bool EventLoop::writeTo(Connection &connection) {
 	connection.written = 0;
 	connection.state = State::Reading;
 
-	return handleReaderStatus(connection, connection.reader.reset());
+	return handleReaderStatus(connection, connection.reader.next());
 }
 
 bool EventLoop::arm(Connection &connection, Interest interest) {
@@ -246,7 +246,7 @@ void EventLoop::resumeAt(std::chrono::steady_clock::time_point deadline, std::co
 	timers_.emplace(deadline, Resumption{ .request = runningRequest_, .coroutine = coroutine });
 }
 
-void EventLoop::resumeAfter(std::function<void()> work, std::coroutine_handle<> coroutine) {
+void EventLoop::offloadThenResume(std::function<void()> work, std::coroutine_handle<> coroutine) {
 	pool_->submit([this, work = std::move(work), resumption = Resumption{ .request = runningRequest_, .coroutine = coroutine }] {
 		work();
 		completions_.push(resumption);
@@ -292,7 +292,7 @@ EventLoop::ConnectionMap::iterator EventLoop::close(ConnectionMap::iterator conn
 	const int clientSocket = connection->second.fd.get();
 
 	(void)poller_.remove(clientSocket);
-	socketHandler_.discardSession(clientSocket);
+	io_.discardSession(clientSocket);
 
 	return connections_.erase(connection); // Closes connection in the UniqueFd destructor
 }
@@ -307,7 +307,7 @@ void EventLoop::sweepIdle() {
 			continue;
 		}
 
-		const bool midRequest = connection->second.reader.abandon() == RequestReader::Status::Rejected;
+		const bool midRequest = connection->second.reader.endOfInput() == RequestReader::Status::Rejected;
 		if (midRequest)
 			log::warn("Closing idle connection from {}", addressToString(connection->second.address));
 		connection = close(connection);

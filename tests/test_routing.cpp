@@ -43,7 +43,7 @@ struct RoutingFixture {
 BOOST_FIXTURE_TEST_SUITE(routing, RoutingFixture)
 
 BOOST_AUTO_TEST_CASE(test_custom_handler_and_middleware) {
-	router.layer(before(sIntercept));
+	router.use(before(sIntercept));
 	router.route("/test", get([](const Request &) { return Response::plainText(200, "Handled by TestHandler"); }));
 	router.pattern(R"(/pattern/\d+)", get([](const Request &) { return Response::plainText(200, "Pattern handler"); }));
 
@@ -63,7 +63,7 @@ BOOST_AUTO_TEST_CASE(test_fallback_answers_unmatched_requests) {
 }
 
 BOOST_AUTO_TEST_CASE(test_coroutine_handler_routes_like_any_other) {
-	router.layer(before(sIntercept));
+	router.use(before(sIntercept));
 	const auto napping = [](const Request &) -> Task<Response> {
 		co_await sleepFor(std::chrono::milliseconds(1));
 		co_return Response::plainText(200, "rested");
@@ -121,13 +121,13 @@ BOOST_AUTO_TEST_CASE(test_known_path_with_another_method_is_405_with_allow) {
 }
 
 BOOST_AUTO_TEST_CASE(test_layer_may_modify_the_final_response) {
-	router.layer(after(
+	router.use(after(
 			[](const Request & /*request*/, Response &response) { response.headers.emplace("X-Tag", std::to_string(response.statusCode)); }));
 	router.route("/ok", get([](const Request &) { return Response::plainText(200, "ok"); }));
 
 	BOOST_CHECK_EQUAL(respond(router, makeRequest("/ok")).headers.at("X-Tag"), "200");
 	BOOST_CHECK_EQUAL(respond(router, makeRequest("/missing")).headers.at("X-Tag"), "404");
-	BOOST_CHECK_EQUAL(router.postProcess(makeRequest("/"), Response::error(413)).headers.at("X-Tag"), "413"); // A rejection
+	BOOST_CHECK_EQUAL(router.runAfter(makeRequest("/"), Response::error(413)).headers.at("X-Tag"), "413"); // A rejection
 }
 
 BOOST_AUTO_TEST_CASE(test_query_extractor) {

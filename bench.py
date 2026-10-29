@@ -100,9 +100,9 @@ def bench(args):
 		shutil.copytree("example/www", os.path.join(workdir, "example/www"))
 
 		flags = ["--no-tls", "--no-access-log", "--no-request-log"] + (["--no-preload"] if args.disk else []) + (["--skip-symlink-check"] if args.skip_symlink_check else [])
-		servers = {"thread-per-core": [exe, "--thread-per-core", *flags], "event-loop": [exe, *flags]}
-		if args.handler_threads:
-			servers["event-loop+pool"] = [exe, f"--handler-threads={args.handler_threads}", *flags]
+		servers = {"thread-per-connection": [exe, "--thread-per-connection", *flags], "event-loop": [exe, *flags]}
+		if args.offload_threads:
+			servers["event-loop+pool"] = [exe, f"--offload-threads={args.offload_threads}", *flags]
 		if args.nginx:
 			servers["nginx"] = nginx_cmd(workdir)
 		servers = {model: [*pin("0-3"), *cmd] for model, cmd in servers.items()}
@@ -135,7 +135,7 @@ def main():
 	parser.add_argument("-p", "--path", default="/file1.txt", help="Request path, e.g. '/sleep?ms=10' for a blocking handler")
 	parser.add_argument("--disk", action="store_true", help="Serve files from disk rather than preloaded into memory")
 	parser.add_argument("--skip-symlink-check", action="store_true", help="Skip per-request symlink resolution, as nginx does by default")
-	parser.add_argument("--handler-threads", type=int, default=0, help="Also run the event loop with a handler pool this size")
+	parser.add_argument("--offload-threads", type=int, default=0, help="Also run the event loop with an offload pool this size")
 	parser.add_argument("--nginx", action="store_true", help="Also run nginx (4 workers, same files) as a baseline")
 	parser.add_argument("wrk_args", nargs=argparse.REMAINDER, help="Extra wrk arguments after --")
 	bench(parser.parse_args())

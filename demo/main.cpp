@@ -48,10 +48,10 @@ ou::http::Router sBuildRouter(const demo::Args &args, ou::http::StaticFiles file
 
 	Router router;
 	if (!args.has("--no-access-log"))
-		router.layer(std::make_shared<AccessLog>(AccessLog::Config{ .path = "access.log" }));
-	router.layer(after([](const Request & /*request*/, Response &response) { response.headers["Server"] = "ou-http-server"; }));
+		router.use(std::make_shared<AccessLog>(AccessLog::Config{ .path = "access.log" }));
+	router.use(after([](const Request & /*request*/, Response &response) { response.headers["Server"] = "ou-http-server"; }));
 	if (args.has("--read-only"))
-		router.layer(before(readOnly));
+		router.use(before(readOnly));
 
 	router.route("/kv", get(kv), put(kv), del(kv))
 			.route("/kv/{key}", get(kvKey), put(kvKey), del(kvKey))
@@ -66,10 +66,10 @@ ou::http::Server::Config sServerConfig(const demo::Args &args) {
 	using ou::http::Server;
 
 	Server::Config config;
-	config.model = args.has("--thread-per-core") ? Server::Model::ThreadPerCore : Server::Model::EventLoop;
+	config.model = args.has("--thread-per-connection") ? Server::Model::ThreadPerConnection : Server::Model::EventLoop;
 	config.logRequests = !args.has("--no-request-log");
-	config.handlerThreads = args.number("--handler-threads=");
-	config.https = { .enabled = !args.has("--no-tls"), .certPath = "./example/certs/cert.pem", .keyPath = "./example/certs/key.pem" };
+	config.offloadThreads = args.number("--offload-threads=");
+	config.tls = { .enabled = !args.has("--no-tls"), .certPath = "./example/certs/cert.pem", .keyPath = "./example/certs/key.pem" };
 	return config;
 }
 

@@ -17,8 +17,8 @@
 
 namespace ou::http {
 
-BlockingLoop::BlockingLoop(Config config, SocketHandler &socketHandler, Dispatch dispatch, Reject reject)
-		: config_(config), socketHandler_(socketHandler), dispatch_(std::move(dispatch)), reject_(std::move(reject)) {}
+BlockingLoop::BlockingLoop(Config config, SocketIo &io, Dispatch dispatch, Reject reject)
+		: config_(config), io_(io), dispatch_(std::move(dispatch)), reject_(std::move(reject)) {}
 
 UniqueFd BlockingLoop::acceptOne(sockaddr_in &clientAddr) const {
 	pollfd descriptor{ .fd = config_.listenSocket, .events = POLLIN, .revents = 0 };
@@ -61,7 +61,7 @@ void BlockingLoop::run(const std::stop_token &stop) {
 			log::error("Unhandled exception of unknown type while serving client");
 		}
 
-		socketHandler_.discardSession(clientSocket.get()); // UniqueFd closes the fd
+		io_.discardSession(clientSocket.get()); // UniqueFd closes the fd
 	}
 }
 
@@ -71,7 +71,7 @@ void BlockingLoop::handleConnection(int clientSocket, const sockaddr_in &clientA
 	(void)setsockopt(clientSocket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
 	(void)setsockopt(clientSocket, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
 
-	if (socketHandler_.handshake(clientSocket).status != IoStatus::Ok)
+	if (io_.handshake(clientSocket).status != IoStatus::Ok)
 		return;
 
 	RequestReader reader(config_.maxRequestBytes);
@@ -93,7 +93,7 @@ void BlockingLoop::handleConnection(int clientSocket, const sockaddr_in &clientA
 		}
 		}
 
-		if (socketHandler_.writeAll(clientSocket, response.serialize()).status != IoStatus::Ok)
+		if (io_.writeAll(clientSocket, response.serialize()).status != IoStatus::Ok)
 			return;
 
 		if (!response.keepAlive)
@@ -104,12 +104,12 @@ void BlockingLoop::handleConnection(int clientSocket, const sockaddr_in &clientA
 RequestReader::Status BlockingLoop::readRequest(int clientSocket, RequestReader &reader) const {
 	std::array<char, RequestReader::kChunkBytes> chunk{};
 
-	RequestReader::Status status = reader.reset();
+	RequestReader::Status status = reader.next();
 
 	while (status == RequestReader::Status::NeedMore) {
-		const IoResult result = socketHandler_.read(clientSocket, chunk);
+		const IoResult result = io_.read(clientSocket, chunk);
 		if (result.status != IoStatus::Ok)
-			return reader.abandon(); // Timed out or the peer went away
+			return reader.endOfInput(); // Timed out or the peer went away
 
 		status = reader.consume({ chunk.data(), result.bytes });
 	}

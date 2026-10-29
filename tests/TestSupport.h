@@ -26,7 +26,7 @@ namespace ou::http {
 inline std::ostream &operator<<(std::ostream &os, Method method) { return os << methodToString(method); }
 
 inline std::ostream &operator<<(std::ostream &os, Server::Model model) {
-	return os << (model == Server::Model::EventLoop ? "EventLoop" : "ThreadPerCore");
+	return os << (model == Server::Model::EventLoop ? "EventLoop" : "ThreadPerConnection");
 }
 } // namespace ou::http
 
@@ -40,7 +40,7 @@ using http::Server;
 using http::StaticFiles;
 using http::Task;
 
-inline constexpr std::array kModels{ Server::Model::ThreadPerCore, Server::Model::EventLoop };
+inline constexpr std::array kModels{ Server::Model::ThreadPerConnection, Server::Model::EventLoop };
 
 // Named per process and test case, so parallel suites don't collide
 class TempDir {

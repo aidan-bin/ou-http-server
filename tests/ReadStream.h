@@ -26,7 +26,7 @@ inline std::vector<std::string> readStream(std::string_view stream, size_t chunk
 			const Request request = reader.take();
 			events.push_back(
 					std::format("{} {} {} {} {}", request.method, request.path, request.query, request.header("Host").value_or(""), request.body));
-			status = reader.reset();
+			status = reader.next();
 		}
 		if (status == RequestReader::Status::Rejected)
 			events.push_back(std::format("reject {}", reader.rejectStatus()));
@@ -37,7 +37,7 @@ inline std::vector<std::string> readStream(std::string_view stream, size_t chunk
 		if (!drain(reader.consume(stream.substr(offset, chunkSize))))
 			return events;
 	}
-	drain(reader.abandon());
+	drain(reader.endOfInput());
 	return events;
 }
 

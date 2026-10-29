@@ -51,9 +51,9 @@ private:
 };
 
 Server::Config sWithTls(Server::Config config) {
-	config.https = { .enabled = true,
-		               .certPath = std::filesystem::path(TEST_CERT_DIR) / "cert.pem",
-		               .keyPath = std::filesystem::path(TEST_CERT_DIR) / "key.pem" };
+	config.tls = { .enabled = true,
+		             .certPath = std::filesystem::path(TEST_CERT_DIR) / "cert.pem",
+		             .keyPath = std::filesystem::path(TEST_CERT_DIR) / "key.pem" };
 	return config;
 }
 
@@ -131,15 +131,15 @@ BOOST_AUTO_TEST_CASE(test_protocol_and_cipher_policy) {
 
 BOOST_AUTO_TEST_CASE(test_start_reports_bad_certificate) {
 	Server::Config missing = sWithTls(makeConfig(Server::Model::EventLoop));
-	missing.https.certPath = root.path() / "missing.pem";
+	missing.tls.certPath = root.path() / "missing.pem";
 	const auto started = Server::start(missing);
 	BOOST_REQUIRE(!started);
-	BOOST_CHECK(started.error().step.starts_with("initialize socket handler"));
+	BOOST_CHECK(started.error().step.starts_with("initialize TLS"));
 }
 
 // Checks the socket timeouts are set before the handshake; needs TLS, since a plain-socket handshake is a no-op
 BOOST_AUTO_TEST_CASE(test_blocking_loop_times_out_silent_tls_peer) {
-	Server::Config silent = sWithTls(makeConfig(Server::Model::ThreadPerCore));
+	Server::Config silent = sWithTls(makeConfig(Server::Model::ThreadPerConnection));
 	silent.idleTimeout = std::chrono::seconds(1);
 	const Server server = startServer(silent);
 

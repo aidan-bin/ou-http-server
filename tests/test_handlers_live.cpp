@@ -66,7 +66,7 @@ BOOST_DATA_TEST_CASE(test_handler_exception_closes_connection, bdata::make(kMode
 
 BOOST_AUTO_TEST_CASE(test_handler_pool_exception_closes_connection) {
 	Server::Config pooled = makeConfig(Server::Model::EventLoop);
-	pooled.handlerThreads = 1;
+	pooled.offloadThreads = 1;
 	sCheckThrowingHandlerCloses(pooled);
 }
 
@@ -118,7 +118,7 @@ BOOST_AUTO_TEST_CASE(test_event_loop_drops_a_sleep_whose_client_left) {
 
 BOOST_AUTO_TEST_CASE(test_handler_pool_keeps_slow_work_off_the_loop) {
 	Server::Config pooled = makeConfig(Server::Model::EventLoop);
-	pooled.handlerThreads = 2;
+	pooled.offloadThreads = 2;
 	pooled.threadCount = 1;
 	Router router;
 	router.route("/slow", get(sSlowWork));
@@ -138,7 +138,7 @@ BOOST_AUTO_TEST_CASE(test_handler_pool_keeps_slow_work_off_the_loop) {
 
 BOOST_AUTO_TEST_CASE(test_handler_pool_stop_discards_queued_jobs) {
 	Server::Config pooled = makeConfig(Server::Model::EventLoop);
-	pooled.handlerThreads = 1;
+	pooled.offloadThreads = 1;
 	Router router;
 	router.route("/slow", get(sSlowWork));
 	std::optional<Server> server = startServer(pooled, router);

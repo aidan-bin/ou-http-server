@@ -1,6 +1,6 @@
 #pragma once
 
-#include "SocketHandler.h"
+#include "SocketIo.h"
 
 #include <filesystem>
 #include <span>
@@ -10,14 +10,14 @@
 
 namespace ou::http {
 
-class SSLSocketHandler final : public SocketHandler {
+class TlsIo final : public SocketIo {
 public:
-	SSLSocketHandler(const std::filesystem::path &certPath, const std::filesystem::path &keyPath);
-	SSLSocketHandler(const SSLSocketHandler &) = delete;
-	SSLSocketHandler &operator=(const SSLSocketHandler &) = delete;
-	SSLSocketHandler(SSLSocketHandler &&) = delete;
-	SSLSocketHandler &operator=(SSLSocketHandler &&) = delete;
-	~SSLSocketHandler() override;
+	TlsIo(const std::filesystem::path &certPath, const std::filesystem::path &keyPath);
+	TlsIo(const TlsIo &) = delete;
+	TlsIo &operator=(const TlsIo &) = delete;
+	TlsIo(TlsIo &&) = delete;
+	TlsIo &operator=(TlsIo &&) = delete;
+	~TlsIo() override;
 
 	IoResult handshake(int clientSocket) final;
 	IoResult read(int clientSocket, std::span<char> buffer) final;

@@ -89,8 +89,8 @@ BOOST_AUTO_TEST_CASE(test_start_rejects_a_config_that_cannot_serve) {
 	noThreads.threadCount = 0;
 	BOOST_CHECK(!Server::start(noThreads));
 
-	Server::Config poolWithoutEventLoop = makeConfig(Server::Model::ThreadPerCore);
-	poolWithoutEventLoop.handlerThreads = 1;
+	Server::Config poolWithoutEventLoop = makeConfig(Server::Model::ThreadPerConnection);
+	poolWithoutEventLoop.offloadThreads = 1;
 	BOOST_CHECK(!Server::start(poolWithoutEventLoop));
 }
 
@@ -154,7 +154,7 @@ BOOST_DATA_TEST_CASE(test_rejection_is_logged, bdata::make(kModels), model) {
 	const std::filesystem::path logPath = root.path() / "access.log";
 
 	Router router;
-	router.layer(std::make_shared<AccessLog>(AccessLog::Config{ .path = logPath, .flushBytes = 0 }));
+	router.use(std::make_shared<AccessLog>(AccessLog::Config{ .path = logPath, .flushBytes = 0 }));
 
 	{ // Destroying the server flushes the log
 		const Server server = startServer(makeConfig(model), router);

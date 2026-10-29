@@ -66,8 +66,8 @@ void Router::addPattern(const std::string &pattern, MethodHandler handler) {
 	patternHandlers_.push_back(std::move(route));
 }
 
-Router &Router::layer(std::shared_ptr<Middleware> middleware) {
-	layers_.push_back(std::move(middleware));
+Router &Router::use(std::shared_ptr<Middleware> added) {
+	middleware_.push_back(std::move(added));
 	return *this;
 }
 
@@ -79,13 +79,13 @@ Router &Router::fallback(Handler handler) {
 Task<Response> Router::handle(Request &request) const {
 	Task<Response> handled = dispatch(request);
 	if (handled.done())
-		return postProcess(request, handled.result());
-	return postProcessLater(std::move(handled), request);
+		return runAfter(request, handled.result());
+	return runAfterLater(std::move(handled), request);
 }
 
 Task<Response> Router::dispatch(Request &request) const {
-	for (const auto &layer : layers_) {
-		if (std::optional<Response> response = layer->process(request))
+	for (const auto &middleware : middleware_) {
+		if (std::optional<Response> response = middleware->before(request))
 			return std::move(*response);
 	}
 
@@ -126,9 +126,9 @@ const Handler *Router::handlerFor(Request &request, std::set<Method> &allowed) c
 	return nullptr;
 }
 
-Response Router::postProcess(const Request &request, Response response) const {
-	for (const auto &layer : layers_) {
-		layer->postProcess(request, response);
+Response Router::runAfter(const Request &request, Response response) const {
+	for (const auto &middleware : middleware_) {
+		middleware->after(request, response);
 	}
 
 	if (request.method == Method::HEAD) {
@@ -139,9 +139,9 @@ Response Router::postProcess(const Request &request, Response response) const {
 	return response;
 }
 
-Task<Response> Router::postProcessLater(Task<Response> handled, const Request &request) const {
+Task<Response> Router::runAfterLater(Task<Response> handled, const Request &request) const {
 	Response response = co_await handled;
-	co_return postProcess(request, std::move(response));
+	co_return runAfter(request, std::move(response));
 }
 
 } // namespace ou::http
