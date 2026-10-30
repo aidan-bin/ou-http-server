@@ -1,6 +1,7 @@
 #include "TestSupport.h"
 #include "ou/http/AccessLog.h"
-#include "ou/http/HttpTypes.h"
+#include "ou/http/Request.h"
+#include "ou/http/Response.h"
 
 #include <boost/test/unit_test.hpp>
 #include <chrono>

@@ -7,7 +7,8 @@
 #include "SocketIo.h"
 #include "ThreadPool.h"
 #include "UniqueFd.h"
-#include "ou/http/HttpTypes.h"
+#include "ou/http/Request.h"
+#include "ou/http/Response.h"
 #include "ou/http/Task.h"
 
 #include <array>

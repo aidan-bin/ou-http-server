@@ -2,6 +2,7 @@
 #include "BlockingLoop.h"
 #include "EventLoop.h"
 #include "Listener.h"
+#include "PlainIo.h"
 #include "TlsIo.h"
 #include "ou/http/Logging.h"
 

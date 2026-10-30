@@ -1,7 +1,8 @@
 #pragma once
 
 #include "RequestReader.h"
-#include "ou/http/HttpTypes.h"
+#include "ou/http/Request.h"
+#include "ou/http/Response.h"
 
 #include <cstddef>
 #include <format>

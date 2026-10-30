@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ou/http/HttpTypes.h"
+#include "ou/http/Response.h"
 
 #include <concepts>
 #include <expected>

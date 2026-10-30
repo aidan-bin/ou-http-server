@@ -2,7 +2,8 @@
 #include "TestSupport.h"
 #include "ou/http/Awaitables.h"
 #include "ou/http/Extractors.h"
-#include "ou/http/HttpTypes.h"
+#include "ou/http/Request.h"
+#include "ou/http/Response.h"
 
 #include <boost/test/unit_test.hpp>
 #include <chrono>

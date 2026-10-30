@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <expected>
+#include <string>
 #include <system_error>
 
 #include <netinet/in.h>
@@ -18,6 +19,11 @@ struct Listener {
 
 // A non-blocking TCP listener on every interface, so an accept loop can poll for shutdown
 [[nodiscard]] std::expected<Listener, Error> openListener(uint16_t port);
+
+// inet_ntoa returns a shared static buffer, so worker threads need this instead
+[[nodiscard]] std::string addressToString(const sockaddr_in &address);
+
+[[nodiscard]] bool setNonBlocking(int fd, bool enable);
 
 // Empty if nothing is queued or the error is transient
 [[nodiscard]] std::expected<UniqueFd, std::error_code> acceptClient(int listenSocket, sockaddr_in &clientAddr);

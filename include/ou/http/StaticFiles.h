@@ -1,7 +1,8 @@
 #pragma once
 
 #include "ou/http/Error.h"
-#include "ou/http/HttpTypes.h"
+#include "ou/http/Request.h"
+#include "ou/http/Response.h"
 
 #include <cstddef>
 #include <expected>

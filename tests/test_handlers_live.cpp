@@ -1,7 +1,8 @@
 #include "Client.h"
 #include "TestSupport.h"
 #include "ou/http/Awaitables.h"
-#include "ou/http/HttpTypes.h"
+#include "ou/http/Request.h"
+#include "ou/http/Response.h"
 #include "ou/http/Server.h"
 
 #include <boost/test/data/test_case.hpp>

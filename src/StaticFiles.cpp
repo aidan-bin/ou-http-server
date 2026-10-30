@@ -1,6 +1,7 @@
 #include "ou/http/StaticFiles.h"
 #include "UniqueFd.h"
 #include "ou/http/Logging.h"
+#include "ou/http/Strings.h"
 
 #include <algorithm>
 #include <array>

@@ -1,5 +1,6 @@
 #include "TestSupport.h"
-#include "ou/http/HttpTypes.h"
+#include "ou/http/Request.h"
+#include "ou/http/Response.h"
 #include "ou/http/StaticFiles.h"
 
 #include <boost/test/unit_test.hpp>

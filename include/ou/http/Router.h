@@ -1,8 +1,9 @@
 #pragma once
 
 #include "ou/http/Extractors.h"
-#include "ou/http/HttpTypes.h"
 #include "ou/http/Middleware.h"
+#include "ou/http/Request.h"
+#include "ou/http/Response.h"
 #include "ou/http/Task.h"
 
 #include <concepts>

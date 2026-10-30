@@ -1,12 +1,14 @@
 #include "Listener.h"
-#include "SocketIo.h"
 
+#include <array>
 #include <cerrno>
 #include <functional>
 #include <string>
 #include <string_view>
 #include <utility>
 
+#include <arpa/inet.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 
@@ -70,6 +72,22 @@ namespace {
 	bool sIsTransientAcceptError(int error) { return error == EAGAIN || error == EWOULDBLOCK || error == ECONNABORTED || error == EINTR; }
 
 } // namespace
+
+std::string addressToString(const sockaddr_in &address) {
+	std::array<char, INET_ADDRSTRLEN> buffer{};
+	if (inet_ntop(AF_INET, &address.sin_addr, buffer.data(), buffer.size()) == nullptr)
+		return "unknown";
+	return { buffer.data() };
+}
+
+bool setNonBlocking(int fd, bool enable) {
+	const int flags = ::fcntl(fd, F_GETFL, 0);
+	if (flags < 0)
+		return false;
+
+	const int updated = enable ? (flags | O_NONBLOCK) : (flags & ~O_NONBLOCK);
+	return ::fcntl(fd, F_SETFL, updated) >= 0;
+}
 
 std::expected<Listener, Error> openListener(uint16_t port) {
 	return sCreate()

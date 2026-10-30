@@ -1,6 +1,7 @@
 #include "ReadStream.h"
 #include "RequestReader.h"
-#include "ou/http/HttpTypes.h"
+#include "ou/http/Request.h"
+#include "ou/http/Response.h"
 
 #include <boost/test/unit_test.hpp>
 #include <chrono>

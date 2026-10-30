@@ -1,6 +1,5 @@
 #include "Listener.h"
 #include "Poller.h"
-#include "SocketIo.h"
 #include "UniqueFd.h"
 
 #include <array>
