@@ -1,5 +1,6 @@
 #include "Listener.h"
 #include "Poller.h"
+#include "SocketIo.h"
 #include "UniqueFd.h"
 
 #include <array>
@@ -70,14 +71,18 @@ BOOST_AUTO_TEST_CASE(test_poller_readiness) {
 	std::span<const ReadyEvent> ready = poller.wait(500ms);
 	BOOST_REQUIRE_EQUAL(ready.size(), 1U);
 	BOOST_CHECK_EQUAL(ready[0].fd, local.get());
-	BOOST_CHECK(ready[0].readable);
 
-	// Switching interest hides the still-unread byte and reports the empty send buffer instead
+	// Write interest reports the empty send buffer, then nothing once it is full, despite the unread byte
 	BOOST_REQUIRE(poller.modify(local.get(), Interest::Write));
 	ready = poller.wait(500ms);
 	BOOST_REQUIRE_EQUAL(ready.size(), 1U);
-	BOOST_CHECK(ready[0].writable);
-	BOOST_CHECK(!ready[0].readable);
+	BOOST_CHECK_EQUAL(ready[0].fd, local.get());
+
+	BOOST_REQUIRE(setNonBlocking(local.get(), true));
+	const std::array<char, 4096> filler{};
+	while (::write(local.get(), filler.data(), filler.size()) > 0) {
+	}
+	BOOST_CHECK(poller.wait(10ms).empty());
 
 	BOOST_REQUIRE(poller.remove(local.get()));
 	BOOST_CHECK(poller.wait(10ms).empty());

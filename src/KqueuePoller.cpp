@@ -77,14 +77,10 @@ std::span<const ReadyEvent> Poller::wait(std::chrono::milliseconds timeout) {
 			continue;
 		}
 
+		// Reports each fd once, as epoll does; kevent() can return its read and write filters separately
 		const int fd = static_cast<int>(event.ident);
-
-		// One call can report both filters for an fd; coalesce so the two backends look identical
-		const auto existing = std::ranges::find(ready_, fd, &ReadyEvent::fd);
-		ReadyEvent &ready = existing != ready_.end() ? *existing : ready_.emplace_back(ReadyEvent{ .fd = fd });
-
-		ready.readable = ready.readable || event.filter == EVFILT_READ || (event.flags & EV_EOF) != 0;
-		ready.writable = ready.writable || (event.filter == EVFILT_WRITE && (event.flags & EV_EOF) == 0);
+		if (!std::ranges::contains(ready_, fd, &ReadyEvent::fd))
+			ready_.push_back({ .fd = fd });
 	}
 
 	return ready_;

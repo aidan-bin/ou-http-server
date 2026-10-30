@@ -64,10 +64,7 @@ std::span<const ReadyEvent> Poller::wait(std::chrono::milliseconds timeout) {
 			continue;
 		}
 
-		// Hangup or error is reported as readable: the read that follows reports Closed (one teardown path)
-		ready_.push_back({ .fd = event.data.fd,
-		                   .readable = (event.events & (EPOLLIN | EPOLLHUP | EPOLLERR)) != 0,
-		                   .writable = (event.events & EPOLLOUT) != 0 });
+		ready_.push_back({ .fd = event.data.fd });
 	}
 
 	return ready_;

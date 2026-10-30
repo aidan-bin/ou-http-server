@@ -48,7 +48,7 @@ void EventLoop::run(const std::stop_token &stop) {
 
 			const auto connection = connections_.find(event.fd);
 			if (connection != connections_.end())
-				serviceOrClose(connection);
+				advanceOrClose(connection);
 		}
 
 		resumeDueTimers();
@@ -86,107 +86,77 @@ void EventLoop::acceptReady() {
 		const auto connection = connections_.try_emplace(clientSocket, std::move(*client), address, context_.maxRequestBytes).first;
 
 		// Start the handshake now rather than waiting for a wakeup that a TLS client will not send
-		serviceOrClose(connection);
+		advanceOrClose(connection);
 	}
 }
 
-void EventLoop::serviceOrClose(ConnectionMap::iterator connection) {
-	bool keepOpen = false;
+void EventLoop::advanceOrClose(ConnectionMap::iterator connection) {
+	connection->second.lastActivity = std::chrono::steady_clock::now();
+
+	Next next = Next::Continue;
 	try {
-		keepOpen = service(connection->second);
+		while (next == Next::Continue)
+			next = step(connection->second);
 	} catch (const std::exception &e) {
 		log::error("Unhandled exception while serving client: {}", e.what());
+		next = Next::Close;
 	} catch (...) {
 		log::error("Unhandled exception of unknown type while serving client");
+		next = Next::Close;
 	}
 
-	if (!keepOpen)
+	if (next == Next::Close)
 		close(connection);
 }
 
-bool EventLoop::service(Connection &connection) {
-	connection.lastActivity = std::chrono::steady_clock::now();
-
+EventLoop::Next EventLoop::step(Connection &connection) {
 	switch (connection.state) {
 		using enum State;
 	case Handshaking:
 		return handshake(connection);
 	case Reading:
-		return readFrom(connection);
+		return read(connection);
 	case Suspended:
-		return respondIfDone(connection);
+		return collectResponse(connection);
 	case Writing:
-		return writeTo(connection);
+		return write(connection);
 	}
 	std::unreachable();
 }
 
-bool EventLoop::handshake(Connection &connection) {
+EventLoop::Next EventLoop::handshake(Connection &connection) {
 	const IoStatus status = context_.io.handshake(connection.fd.get()).status;
 	if (status != IoStatus::Ok)
-		return rearm(connection, status);
+		return waitFor(connection, status);
 
 	connection.state = State::Reading;
-	return readFrom(connection);
+	return Next::Continue;
 }
 
-bool EventLoop::readFrom(Connection &connection) {
+EventLoop::Next EventLoop::read(Connection &connection) {
 	const IoResult result = context_.io.read(connection.fd.get(), scratch_);
 	if (result.status != IoStatus::Ok)
-		return rearm(connection, result.status);
+		return waitFor(connection, result.status);
 
-	return handleReaderStatus(connection, connection.reader.consume({ scratch_.data(), result.bytes }));
+	return afterRead(connection, connection.reader.consume({ scratch_.data(), result.bytes }));
 }
 
-bool EventLoop::handleReaderStatus(Connection &connection, RequestReader::Status status) {
-	switch (status) {
-		using enum RequestReader::Status;
-	case NeedMore:
-		connection.state = State::Reading;
-		// Check if TLS still holds data, since the poller would not wake for it
-		if (context_.io.hasBuffered(connection.fd.get()))
-			return readFrom(connection);
-		return arm(connection, Interest::Read);
+EventLoop::Next EventLoop::collectResponse(Connection &connection) {
+	if (!connection.task || !connection.task->done())
+		return Next::Wait;
 
-	case Rejected:
-		return respond(connection, context_.dispatcher.reject(connection.reader.rejectStatus(), connection.address));
+	Task<Response> task = std::move(*connection.task);
+	connection.task.reset();
 
-	case Complete:
-		break;
-	}
+	if (!poller_.add(connection.fd.get(), Interest::Read))
+		return Next::Close;
+	connection.interest = Interest::Read;
 
-	return start(connection);
+	beginWrite(connection, task.result());
+	return Next::Continue;
 }
 
-bool EventLoop::start(Connection &connection) {
-	connection.request = connection.reader.take();
-	connection.generation = nextGeneration_++;
-	runningRequest_ = { .fd = connection.fd.get(), .generation = connection.generation };
-
-	Task<Response> task = context_.dispatcher.serve(connection.request, connection.address);
-	if (task.done())
-		return respond(connection, task.result());
-
-	// Level-triggered: pipelined bytes or a hangup would otherwise wake the loop until the response is sent
-	if (!poller_.remove(connection.fd.get()))
-		return false;
-
-	connection.state = State::Suspended;
-	connection.task.emplace(std::move(task));
-	return true;
-}
-
-bool EventLoop::respond(Connection &connection, const Response &response) {
-	connection.outBuffer = response.serialize();
-	connection.written = 0;
-	connection.state = State::Writing;
-	connection.keepAlive = response.keepAlive;
-
-	// Try immediately: the send buffer is almost always empty, which saves a wakeup per request
-	return writeTo(connection);
-}
-
-bool EventLoop::writeTo(Connection &connection) {
+EventLoop::Next EventLoop::write(Connection &connection) {
 	while (connection.written < connection.outBuffer.size()) {
 		const std::string_view remaining = std::string_view(connection.outBuffer).substr(connection.written);
 
@@ -194,49 +164,81 @@ bool EventLoop::writeTo(Connection &connection) {
 		connection.written += result.bytes;
 
 		if (result.status != IoStatus::Ok)
-			return rearm(connection, result.status);
+			return waitFor(connection, result.status);
 	}
 
 	if (!connection.keepAlive)
-		return false;
+		return Next::Close;
 
 	connection.outBuffer.clear();
 	connection.written = 0;
-	connection.state = State::Reading;
-
-	return handleReaderStatus(connection, connection.reader.next());
+	return afterRead(connection, connection.reader.next());
 }
 
-bool EventLoop::arm(Connection &connection, Interest interest) {
-	if (connection.interest == interest)
-		return true;
+EventLoop::Next EventLoop::afterRead(Connection &connection, RequestReader::Status status) {
+	switch (status) {
+		using enum RequestReader::Status;
+	case NeedMore:
+		connection.state = State::Reading;
+		// TLS may hold decrypted bytes the poller cannot see
+		if (context_.io.hasBuffered(connection.fd.get()))
+			return Next::Continue;
+		return waitFor(connection, Interest::Read);
 
-	if (!poller_.modify(connection.fd.get(), interest))
-		return false;
+	case Rejected:
+		beginWrite(connection, context_.dispatcher.reject(connection.reader.rejectStatus(), connection.address));
+		return Next::Continue;
 
-	connection.interest = interest;
-	return true;
+	case Complete:
+		return runHandler(connection);
+	}
+	std::unreachable();
 }
 
-bool EventLoop::rearm(Connection &connection, IoStatus status) {
+EventLoop::Next EventLoop::runHandler(Connection &connection) {
+	connection.request = connection.reader.take();
+	connection.generation = nextGeneration_++;
+
+	runningRequest_ = RequestId{ .fd = connection.fd.get(), .generation = connection.generation };
+	Task<Response> task = context_.dispatcher.serve(connection.request, connection.address);
+	runningRequest_ = {};
+
+	if (task.done()) {
+		beginWrite(connection, task.result());
+		return Next::Continue;
+	}
+
+	// Level-triggered: pipelined bytes or a hangup would otherwise wake the loop until the response is sent
+	if (!poller_.remove(connection.fd.get()))
+		return Next::Close;
+
+	connection.state = State::Suspended;
+	connection.task.emplace(std::move(task));
+	return Next::Wait;
+}
+
+void EventLoop::beginWrite(Connection &connection, const Response &response) {
+	connection.outBuffer = response.serialize();
+	connection.written = 0;
+	connection.keepAlive = response.keepAlive;
+	connection.state = State::Writing;
+}
+
+EventLoop::Next EventLoop::waitFor(Connection &connection, Interest interest) {
+	if (connection.interest != interest) {
+		if (!poller_.modify(connection.fd.get(), interest))
+			return Next::Close;
+		connection.interest = interest;
+	}
+	return Next::Wait;
+}
+
+EventLoop::Next EventLoop::waitFor(Connection &connection, IoStatus status) {
 	if (status == IoStatus::WantRead)
-		return arm(connection, Interest::Read);
+		return waitFor(connection, Interest::Read);
 	if (status == IoStatus::WantWrite)
-		return arm(connection, Interest::Write);
-	return false;
-}
-
-bool EventLoop::respondIfDone(Connection &connection) {
-	if (!connection.task || !connection.task->done())
-		return true;
-
-	Task<Response> task = std::move(*connection.task);
-	connection.task.reset();
-
-	if (!poller_.add(connection.fd.get(), Interest::Read))
-		return false;
-	connection.interest = Interest::Read;
-	return respond(connection, task.result()); // Rethrows a handler's exception into serviceOrClose
+		return waitFor(connection, Interest::Write);
+	return Next::Close;
 }
 
 EventLoop *EventLoop::current() noexcept { return g_currentLoop; }
@@ -261,7 +263,8 @@ void EventLoop::resume(const Resumption &resumption) {
 
 	runningRequest_ = resumption.request;
 	resumption.coroutine.resume();
-	serviceOrClose(connection);
+	runningRequest_ = {};
+	advanceOrClose(connection);
 }
 
 void EventLoop::resumeDueTimers() {

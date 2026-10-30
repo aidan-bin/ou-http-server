@@ -14,8 +14,6 @@ enum class Interest : uint8_t { Read, Write };
 
 struct ReadyEvent {
 	int fd = -1;
-	bool readable = false;
-	bool writable = false;
 	bool woken = false;
 };
 

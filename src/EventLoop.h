@@ -71,26 +71,27 @@ private:
 
 	using ConnectionMap = std::unordered_map<int, Connection>;
 
+	enum class Next : uint8_t { Continue, Wait, Close };
+
 	void acceptReady();
-	void serviceOrClose(ConnectionMap::iterator connection);
 
-	// Runs one step of the connection's state machine; false when the connection is done and should be closed
-	[[nodiscard]] bool service(Connection &connection);
-	[[nodiscard]] bool handshake(Connection &connection);
-	[[nodiscard]] bool readFrom(Connection &connection);
-	[[nodiscard]] bool handleReaderStatus(Connection &connection, RequestReader::Status status);
-	[[nodiscard]] bool respond(Connection &connection, const Response &response);
-	[[nodiscard]] bool writeTo(Connection &connection);
-	[[nodiscard]] bool arm(Connection &connection, Interest interest);
+	// Steps the connection until it has to wait; closes it when it is done or a step throws
+	void advanceOrClose(ConnectionMap::iterator connection);
+	[[nodiscard]] Next step(Connection &connection);
 
-	// Waits for the readiness a non-Ok result asks for; false if the connection is done
-	[[nodiscard]] bool rearm(Connection &connection, IoStatus status);
+	[[nodiscard]] Next handshake(Connection &connection);
+	[[nodiscard]] Next read(Connection &connection);
+	[[nodiscard]] Next collectResponse(Connection &connection);
+	[[nodiscard]] Next write(Connection &connection);
 
-	// Runs the handler; suspends the connection if the handler's coroutine does
-	[[nodiscard]] bool start(Connection &connection);
+	[[nodiscard]] Next afterRead(Connection &connection, RequestReader::Status status);
 
-	// Sends the handler's response once its coroutine finishes; until then keeps the connection suspended
-	[[nodiscard]] bool respondIfDone(Connection &connection);
+	[[nodiscard]] Next runHandler(Connection &connection);
+	static void beginWrite(Connection &connection, const Response &response);
+
+	[[nodiscard]] Next waitFor(Connection &connection, Interest interest);
+	// Waits for the readiness a non-Ok status asks for; closes on Closed or Error
+	[[nodiscard]] Next waitFor(Connection &connection, IoStatus status);
 
 	// Resumes a suspended request's coroutine; dropped if the request already ended
 	void resume(const Resumption &resumption);
@@ -117,7 +118,8 @@ private:
 	ConnectionMap connections_;
 	std::optional<std::chrono::steady_clock::time_point> acceptPausedUntil_;
 	uint64_t nextGeneration_ = 0;
-	RequestId runningRequest_; // The request whose handler is running; awaitables tag their resumptions with it
+	// The request whose handler is running, for awaiters to tag resumptions with; fd -1 between runs
+	RequestId runningRequest_;
 	std::array<char, RequestReader::kChunkBytes> scratch_{};
 };
 
