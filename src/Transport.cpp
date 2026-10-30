@@ -27,7 +27,7 @@ namespace {
 
 } // namespace
 
-std::expected<std::unique_ptr<Transport>, Error> Transport::start(const Server::Config &config, Dispatch dispatch, Reject reject) {
+std::expected<std::unique_ptr<Transport>, Error> Transport::start(const Server::Config &config, Dispatcher dispatcher) {
 	if (std::optional<Error> invalid = sConfigError(config))
 		return std::unexpected(std::move(*invalid));
 
@@ -47,14 +47,18 @@ std::expected<std::unique_ptr<Transport>, Error> Transport::start(const Server::
 
 	log::info("Server socket {} bound and listening on port {} with {} threads...", listener->socket.get(), listener->port,
 	          config.threadCount);
-	return std::make_unique<Transport>(config, std::move(io), std::move(*listener), std::move(dispatch), std::move(reject));
+	return std::make_unique<Transport>(config, std::move(io), std::move(*listener), std::move(dispatcher));
 }
 
-Transport::Transport(const Server::Config &config, std::unique_ptr<SocketIo> io, Listener listener, Dispatch dispatch, Reject reject)
+Transport::Transport(const Server::Config &config, std::unique_ptr<SocketIo> io, Listener listener, Dispatcher dispatcher)
 		: listenSocket_(std::move(listener.socket)), port_(listener.port), io_(std::move(io)),
-			pool_(config.offloadThreads > 0 ? std::make_unique<ThreadPool>(config.offloadThreads) : nullptr), dispatch_(std::move(dispatch)),
-			reject_(std::move(reject)), model_(config.model),
-			loopConfig_{ .listenSocket = listenSocket_.get(), .maxRequestBytes = config.maxRequestBytes, .idleTimeout = config.idleTimeout } {
+			pool_(config.offloadThreads > 0 ? std::make_unique<ThreadPool>(config.offloadThreads) : nullptr), dispatcher_(std::move(dispatcher)),
+			model_(config.model), context_{ .listenSocket = listenSocket_.get(),
+	                                    .maxRequestBytes = config.maxRequestBytes,
+	                                    .idleTimeout = config.idleTimeout,
+	                                    .io = *io_,
+	                                    .dispatcher = dispatcher_,
+	                                    .pool = pool_.get() } {
 	for (unsigned i = 0; i < config.threadCount; ++i)
 		threads_.emplace_back([this](const std::stop_token &stop) { run(stop); });
 }
@@ -77,12 +81,12 @@ void Transport::run(const std::stop_token &stop) {
 	(void)pthread_sigmask(SIG_BLOCK, &pipe, nullptr);
 
 	if (model_ == Server::Model::EventLoop) {
-		EventLoop loop(loopConfig_, *io_, dispatch_, reject_, pool_.get());
+		EventLoop loop(context_);
 		loop.run(stop);
 		return;
 	}
 
-	BlockingLoop loop(loopConfig_, *io_, dispatch_, reject_);
+	BlockingLoop loop(context_);
 	loop.run(stop);
 }
 

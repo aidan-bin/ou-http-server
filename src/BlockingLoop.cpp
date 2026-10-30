@@ -17,11 +17,10 @@
 
 namespace ou::http {
 
-BlockingLoop::BlockingLoop(Config config, SocketIo &io, Dispatch dispatch, Reject reject)
-		: config_(config), io_(io), dispatch_(std::move(dispatch)), reject_(std::move(reject)) {}
+BlockingLoop::BlockingLoop(LoopContext context) : context_(context) {}
 
 UniqueFd BlockingLoop::acceptOne(sockaddr_in &clientAddr) const {
-	pollfd descriptor{ .fd = config_.listenSocket, .events = POLLIN, .revents = 0 };
+	pollfd descriptor{ .fd = context_.listenSocket, .events = POLLIN, .revents = 0 };
 
 	const int ready = ::poll(&descriptor, 1, static_cast<int>(kPollTimeout.count()));
 	if (ready == 0)
@@ -33,7 +32,7 @@ UniqueFd BlockingLoop::acceptOne(sockaddr_in &clientAddr) const {
 		return {};
 	}
 
-	std::expected<UniqueFd, std::error_code> client = acceptClient(config_.listenSocket, clientAddr);
+	std::expected<UniqueFd, std::error_code> client = acceptClient(context_.listenSocket, clientAddr);
 	if (!client) {
 		log::warn("Failed to accept connection: {}", client.error().message());
 		std::this_thread::sleep_for(kAcceptRetryDelay);
@@ -61,20 +60,20 @@ void BlockingLoop::run(const std::stop_token &stop) {
 			log::error("Unhandled exception of unknown type while serving client");
 		}
 
-		io_.discardSession(clientSocket.get()); // UniqueFd closes the fd
+		context_.io.discardSession(clientSocket.get()); // UniqueFd closes the fd
 	}
 }
 
 void BlockingLoop::handleConnection(int clientSocket, const sockaddr_in &clientAddr, const std::stop_token &stop) const {
 	// Bounds every blocking read and write (a stalled peer releases this thread after idleTimeout)
-	const timeval timeout{ .tv_sec = static_cast<time_t>(config_.idleTimeout.count()), .tv_usec = 0 };
+	const timeval timeout{ .tv_sec = static_cast<time_t>(context_.idleTimeout.count()), .tv_usec = 0 };
 	(void)setsockopt(clientSocket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
 	(void)setsockopt(clientSocket, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
 
-	if (io_.handshake(clientSocket).status != IoStatus::Ok)
+	if (context_.io.handshake(clientSocket).status != IoStatus::Ok)
 		return;
 
-	RequestReader reader(config_.maxRequestBytes);
+	RequestReader reader(context_.maxRequestBytes);
 
 	while (!stop.stop_requested()) {
 		Response response;
@@ -84,16 +83,16 @@ void BlockingLoop::handleConnection(int clientSocket, const sockaddr_in &clientA
 			// The peer went away with nothing to answer
 			return;
 		case Rejected:
-			response = reject_(reader.rejectStatus(), clientAddr);
+			response = context_.dispatcher.reject(reader.rejectStatus(), clientAddr);
 			break;
 		case Complete: {
 			Request request = reader.take();
-			response = dispatch_(request, clientAddr).result();
+			response = context_.dispatcher.serve(request, clientAddr).result();
 			break;
 		}
 		}
 
-		if (io_.writeAll(clientSocket, response.serialize()).status != IoStatus::Ok)
+		if (context_.io.writeAll(clientSocket, response.serialize()).status != IoStatus::Ok)
 			return;
 
 		if (!response.keepAlive)
@@ -107,7 +106,7 @@ RequestReader::Status BlockingLoop::readRequest(int clientSocket, RequestReader 
 	RequestReader::Status status = reader.next();
 
 	while (status == RequestReader::Status::NeedMore) {
-		const IoResult result = io_.read(clientSocket, chunk);
+		const IoResult result = context_.io.read(clientSocket, chunk);
 		if (result.status != IoStatus::Ok)
 			return reader.endOfInput(); // Timed out or the peer went away
 

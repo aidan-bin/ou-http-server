@@ -127,7 +127,7 @@ BOOST_AUTO_TEST_CASE(test_layer_may_modify_the_final_response) {
 
 	BOOST_CHECK_EQUAL(respond(router, makeRequest("/ok")).headers.at("X-Tag"), "200");
 	BOOST_CHECK_EQUAL(respond(router, makeRequest("/missing")).headers.at("X-Tag"), "404");
-	BOOST_CHECK_EQUAL(router.runAfter(makeRequest("/"), Response::error(413)).headers.at("X-Tag"), "413"); // A rejection
+	BOOST_CHECK_EQUAL(router.finish(makeRequest("/"), Response::error(413)).headers.at("X-Tag"), "413"); // A rejection
 }
 
 BOOST_AUTO_TEST_CASE(test_query_extractor) {

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "LoopConfig.h"
+#include "LoopContext.h"
 #include "RequestReader.h"
 #include "SocketIo.h"
 #include "UniqueFd.h"
@@ -15,9 +15,7 @@ namespace ou::http {
 // its thread until it closes, so threadCount caps how many clients can be served at once
 class BlockingLoop {
 public:
-	using Config = LoopConfig;
-
-	BlockingLoop(Config config, SocketIo &io, Dispatch dispatch, Reject reject);
+	explicit BlockingLoop(LoopContext context);
 
 	// Returns within one accept poll timeout of a stop request
 	void run(const std::stop_token &stop);
@@ -33,10 +31,7 @@ private:
 	// Reads until a request is complete, unacceptable, or the peer stops sending
 	[[nodiscard]] RequestReader::Status readRequest(int clientSocket, RequestReader &reader) const;
 
-	Config config_;
-	SocketIo &io_;
-	Dispatch dispatch_;
-	Reject reject_;
+	LoopContext context_;
 };
 
 } // namespace ou::http

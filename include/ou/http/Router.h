@@ -71,8 +71,8 @@ public:
 	// then the fallback, then every middleware's after(). May finish later if the handler suspends.
 	[[nodiscard]] Task<Response> handle(Request &request) const;
 
-	// Runs every middleware's after() and drops the body for HEAD; for a response with no routed request
-	[[nodiscard]] Response runAfter(const Request &request, Response response) const;
+	// Runs every middleware's after() and drops the body for HEAD; also for a response to a request that never parsed
+	[[nodiscard]] Response finish(const Request &request, Response response) const;
 
 private:
 	struct PatternRoute {
@@ -89,7 +89,6 @@ private:
 	// that the path is routed for but the request's is not
 	[[nodiscard]] const Handler *handlerFor(Request &request, std::set<Method> &allowed) const;
 	[[nodiscard]] Task<Response> dispatch(Request &request) const;
-	[[nodiscard]] Task<Response> runAfterLater(Task<Response> handled, const Request &request) const;
 
 	// Exact paths are looked up; patterns are tried in registration order
 	std::map<std::string, std::map<Method, Handler>> pathHandlers_;

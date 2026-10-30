@@ -15,8 +15,7 @@ namespace {
 
 } // namespace
 
-EventLoop::EventLoop(Config config, SocketIo &io, Dispatch dispatch, Reject reject, ThreadPool *pool)
-		: config_(config), io_(io), dispatch_(std::move(dispatch)), reject_(std::move(reject)), pool_(pool) {}
+EventLoop::EventLoop(LoopContext context) : context_(context) {}
 
 void EventLoop::run(const std::stop_token &stop) {
 	if (!poller_.valid()) {
@@ -24,12 +23,12 @@ void EventLoop::run(const std::stop_token &stop) {
 		return;
 	}
 
-	if (!poller_.add(config_.listenSocket, Interest::Read)) {
-		log::error("Failed to watch listening socket {}", config_.listenSocket);
+	if (!poller_.add(context_.listenSocket, Interest::Read)) {
+		log::error("Failed to watch listening socket {}", context_.listenSocket);
 		return;
 	}
 
-	if (pool_ != nullptr && !poller_.enableWake()) {
+	if (context_.pool != nullptr && !poller_.enableWake()) {
 		log::error("Failed to set up offload pool wakeups");
 		return;
 	}
@@ -42,7 +41,7 @@ void EventLoop::run(const std::stop_token &stop) {
 				continue;
 			}
 
-			if (event.fd == config_.listenSocket) {
+			if (event.fd == context_.listenSocket) {
 				acceptReady();
 				continue;
 			}
@@ -62,14 +61,14 @@ void EventLoop::run(const std::stop_token &stop) {
 	}
 	g_currentLoop = nullptr;
 
-	(void)poller_.remove(config_.listenSocket);
+	(void)poller_.remove(context_.listenSocket);
 }
 
 void EventLoop::acceptReady() {
 	while (true) {
 		sockaddr_in address{};
 
-		std::expected<UniqueFd, std::error_code> client = acceptClient(config_.listenSocket, address);
+		std::expected<UniqueFd, std::error_code> client = acceptClient(context_.listenSocket, address);
 		if (!client) {
 			log::warn("Failed to accept connection: {}", client.error().message());
 			pauseAccepting();
@@ -84,7 +83,7 @@ void EventLoop::acceptReady() {
 			continue;
 		}
 
-		const auto connection = connections_.try_emplace(clientSocket, std::move(*client), address, config_.maxRequestBytes).first;
+		const auto connection = connections_.try_emplace(clientSocket, std::move(*client), address, context_.maxRequestBytes).first;
 
 		// Start the handshake now rather than waiting for a wakeup that a TLS client will not send
 		serviceOrClose(connection);
@@ -123,7 +122,7 @@ bool EventLoop::service(Connection &connection) {
 }
 
 bool EventLoop::handshake(Connection &connection) {
-	const IoStatus status = io_.handshake(connection.fd.get()).status;
+	const IoStatus status = context_.io.handshake(connection.fd.get()).status;
 	if (status != IoStatus::Ok)
 		return rearm(connection, status);
 
@@ -132,7 +131,7 @@ bool EventLoop::handshake(Connection &connection) {
 }
 
 bool EventLoop::readFrom(Connection &connection) {
-	const IoResult result = io_.read(connection.fd.get(), scratch_);
+	const IoResult result = context_.io.read(connection.fd.get(), scratch_);
 	if (result.status != IoStatus::Ok)
 		return rearm(connection, result.status);
 
@@ -145,12 +144,12 @@ bool EventLoop::handleReaderStatus(Connection &connection, RequestReader::Status
 	case NeedMore:
 		connection.state = State::Reading;
 		// Check if TLS still holds data, since the poller would not wake for it
-		if (io_.hasBuffered(connection.fd.get()))
+		if (context_.io.hasBuffered(connection.fd.get()))
 			return readFrom(connection);
 		return arm(connection, Interest::Read);
 
 	case Rejected:
-		return respond(connection, reject_(connection.reader.rejectStatus(), connection.address));
+		return respond(connection, context_.dispatcher.reject(connection.reader.rejectStatus(), connection.address));
 
 	case Complete:
 		break;
@@ -164,7 +163,7 @@ bool EventLoop::start(Connection &connection) {
 	connection.generation = nextGeneration_++;
 	runningRequest_ = { .fd = connection.fd.get(), .generation = connection.generation };
 
-	Task<Response> task = dispatch_(connection.request, connection.address);
+	Task<Response> task = context_.dispatcher.serve(connection.request, connection.address);
 	if (task.done())
 		return respond(connection, task.result());
 
@@ -191,7 +190,7 @@ bool EventLoop::writeTo(Connection &connection) {
 	while (connection.written < connection.outBuffer.size()) {
 		const std::string_view remaining = std::string_view(connection.outBuffer).substr(connection.written);
 
-		const IoResult result = io_.write(connection.fd.get(), remaining);
+		const IoResult result = context_.io.write(connection.fd.get(), remaining);
 		connection.written += result.bytes;
 
 		if (result.status != IoStatus::Ok)
@@ -247,7 +246,7 @@ void EventLoop::resumeAt(std::chrono::steady_clock::time_point deadline, std::co
 }
 
 void EventLoop::offloadThenResume(std::function<void()> work, std::coroutine_handle<> coroutine) {
-	pool_->submit([this, work = std::move(work), resumption = Resumption{ .request = runningRequest_, .coroutine = coroutine }] {
+	context_.pool->submit([this, work = std::move(work), resumption = Resumption{ .request = runningRequest_, .coroutine = coroutine }] {
 		work();
 		completions_.push(resumption);
 	});
@@ -292,7 +291,7 @@ EventLoop::ConnectionMap::iterator EventLoop::close(ConnectionMap::iterator conn
 	const int clientSocket = connection->second.fd.get();
 
 	(void)poller_.remove(clientSocket);
-	io_.discardSession(clientSocket);
+	context_.io.discardSession(clientSocket);
 
 	return connections_.erase(connection); // Closes connection in the UniqueFd destructor
 }
@@ -302,7 +301,7 @@ void EventLoop::sweepIdle() {
 	const auto now = std::chrono::steady_clock::now();
 
 	for (auto connection = connections_.begin(); connection != connections_.end();) {
-		if (connection->second.state == State::Suspended || now - connection->second.lastActivity < config_.idleTimeout) {
+		if (connection->second.state == State::Suspended || now - connection->second.lastActivity < context_.idleTimeout) {
 			++connection;
 			continue;
 		}
@@ -315,14 +314,14 @@ void EventLoop::sweepIdle() {
 }
 
 void EventLoop::pauseAccepting() {
-	if (poller_.remove(config_.listenSocket))
+	if (poller_.remove(context_.listenSocket))
 		acceptPausedUntil_ = std::chrono::steady_clock::now() + kAcceptRetryDelay;
 }
 
 void EventLoop::resumeAccepting() {
 	if (!acceptPausedUntil_ || std::chrono::steady_clock::now() < *acceptPausedUntil_)
 		return;
-	if (poller_.add(config_.listenSocket, Interest::Read))
+	if (poller_.add(context_.listenSocket, Interest::Read))
 		acceptPausedUntil_.reset();
 }
 

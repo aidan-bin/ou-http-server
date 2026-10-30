@@ -1,9 +1,11 @@
 #pragma once
 
+#include <concepts>
 #include <coroutine>
 #include <exception>
 #include <optional>
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
 #include <variant>
 
@@ -76,5 +78,22 @@ private:
 	std::optional<T> value_;
 	std::coroutine_handle<promise_type> handle_;
 };
+
+namespace detail {
+
+	template <typename T, typename F>
+	Task<std::invoke_result_t<F &, T>> thenLater(Task<T> task, F next) {
+		co_return next(co_await task);
+	}
+
+} // namespace detail
+
+// Passes the task's result to next: right away if it is done, without a coroutine frame, else once it finishes
+template <typename T, std::invocable<T> F>
+Task<std::invoke_result_t<F &, T>> then(Task<T> task, F next) {
+	if (task.done())
+		return next(task.result());
+	return detail::thenLater(std::move(task), std::move(next));
+}
 
 } // namespace ou::http

@@ -142,7 +142,7 @@ namespace detail {
 
 	template <IntoResponse U>
 	Task<Response> toResponseTask(Task<U> task) {
-		co_return intoResponse(co_await task);
+		return then(std::move(task), [](U value) { return intoResponse(std::move(value)); });
 	}
 
 	template <typename F, typename R, typename... Ps>

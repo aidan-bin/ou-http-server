@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CompletionQueue.h"
-#include "LoopConfig.h"
+#include "LoopContext.h"
 #include "Poller.h"
 #include "RequestReader.h"
 #include "SocketIo.h"
@@ -30,9 +30,7 @@ namespace ou::http {
 // One per worker thread; owns each connection
 class EventLoop {
 public:
-	using Config = LoopConfig;
-
-	EventLoop(Config config, SocketIo &io, Dispatch dispatch, Reject reject, ThreadPool *pool = nullptr);
+	explicit EventLoop(LoopContext context);
 
 	// Returns within one poll timeout of a stop request
 	void run(const std::stop_token &stop);
@@ -46,7 +44,7 @@ public:
 	// Runs work on the offload pool, then resumes the running request's coroutine here; needs hasPool()
 	void offloadThenResume(std::function<void()> work, std::coroutine_handle<> coroutine);
 
-	[[nodiscard]] bool hasPool() const noexcept { return pool_ != nullptr; }
+	[[nodiscard]] bool hasPool() const noexcept { return context_.pool != nullptr; }
 
 private:
 	enum class State : uint8_t { Handshaking, Reading, Suspended, Writing };
@@ -111,11 +109,7 @@ private:
 	void pauseAccepting();
 	void resumeAccepting();
 
-	Config config_;
-	SocketIo &io_;
-	Dispatch dispatch_;
-	Reject reject_;
-	ThreadPool *pool_;
+	LoopContext context_;
 
 	Poller poller_;
 	CompletionQueue completions_{ poller_ };
