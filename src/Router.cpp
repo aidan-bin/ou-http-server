@@ -50,20 +50,20 @@ void Router::addRoute(const std::string &path, MethodHandler handler) {
 	if (path.contains('{'))
 		addPattern(path, std::move(handler));
 	else
-		pathHandlers_[path][handler.method] = std::move(handler.handler);
+		exactRoutes_[path][handler.method] = std::move(handler.handler);
 }
 
 void Router::addPattern(const std::string &pattern, MethodHandler handler) {
-	const auto existing = std::ranges::find(patternHandlers_, pattern, &PatternRoute::source);
-	if (existing != patternHandlers_.end()) {
+	const auto existing = std::ranges::find(patternRoutes_, pattern, &PatternRoute::source);
+	if (existing != patternRoutes_.end()) {
 		existing->handlers.emplace(handler.method, std::move(handler.handler));
 		return;
 	}
 
 	auto [regex, names] = sCompileSegments(pattern);
-	PatternRoute route = { .source = pattern, .pattern = std::regex(regex), .names = std::move(names), .handlers = {} };
+	PatternRoute route = { .source = pattern, .regex = std::regex(regex), .names = std::move(names), .handlers = {} };
 	route.handlers.emplace(handler.method, std::move(handler.handler));
-	patternHandlers_.push_back(std::move(route));
+	patternRoutes_.push_back(std::move(route));
 }
 
 Router &Router::use(std::shared_ptr<Middleware> added) {
@@ -77,34 +77,34 @@ Router &Router::fallback(Handler handler) {
 }
 
 Task<Response> Router::handle(Request &request) const {
-	return then(dispatch(request), [this, &request](Response response) { return finish(request, std::move(response)); });
+	return then(answer(request), [this, &request](Response response) { return finish(request, std::move(response)); });
 }
 
-Task<Response> Router::dispatch(Request &request) const {
+Task<Response> Router::answer(Request &request) const {
 	for (const auto &middleware : middleware_) {
 		if (std::optional<Response> response = middleware->before(request))
 			return std::move(*response);
 	}
 
 	std::set<Method> allowed;
-	if (const Handler *handler = handlerFor(request, allowed))
+	if (const Handler *handler = match(request, allowed))
 		return (*handler)(request);
 	if (!allowed.empty())
 		return sNotAllowed(allowed);
 	return fallback_(request);
 }
 
-const Handler *Router::handlerFor(Request &request, std::set<Method> &allowed) const {
-	if (const auto path = pathHandlers_.find(request.path); path != pathHandlers_.end()) {
-		if (const auto handler = path->second.find(request.method); handler != path->second.end())
+const Handler *Router::match(Request &request, std::set<Method> &allowed) const {
+	if (const auto exact = exactRoutes_.find(request.path); exact != exactRoutes_.end()) {
+		if (const auto handler = exact->second.find(request.method); handler != exact->second.end())
 			return &handler->second;
-		for (const auto &[method, handler] : path->second)
+		for (const auto &[method, unused] : exact->second)
 			allowed.insert(method);
 	}
 
-	std::smatch match;
-	for (const PatternRoute &route : patternHandlers_) {
-		if (!std::regex_match(request.path, match, route.pattern))
+	std::smatch captures;
+	for (const PatternRoute &route : patternRoutes_) {
+		if (!std::regex_match(request.path, captures, route.regex))
 			continue;
 
 		const auto handler = route.handlers.find(request.method);
@@ -114,8 +114,8 @@ const Handler *Router::handlerFor(Request &request, std::set<Method> &allowed) c
 			continue;
 		}
 
-		for (size_t i = 0; i < match.size(); ++i)
-			request.pathParams.emplace_back(match.position(i), match.length(i));
+		for (size_t i = 0; i < captures.size(); ++i)
+			request.pathParams.emplace_back(captures.position(i), captures.length(i));
 		request.pathParamNames = route.names;
 		return &handler->second;
 	}

@@ -75,24 +75,25 @@ public:
 	[[nodiscard]] Response finish(const Request &request, Response response) const;
 
 private:
+	using MethodHandlers = std::map<Method, Handler>;
+
 	struct PatternRoute {
 		std::string source;
-		std::regex pattern;
+		std::regex regex;
 		std::vector<std::string> names;
-		std::map<Method, Handler> handlers;
+		MethodHandlers handlers;
 	};
 
 	void addRoute(const std::string &path, MethodHandler handler);
 	void addPattern(const std::string &pattern, MethodHandler handler);
 
-	// Exact path, then pattern; null if none. Stores pattern captures in request, and adds to `allowed` the methods
-	// that the path is routed for but the request's is not
-	[[nodiscard]] const Handler *handlerFor(Request &request, std::set<Method> &allowed) const;
-	[[nodiscard]] Task<Response> dispatch(Request &request) const;
+	[[nodiscard]] Task<Response> answer(Request &request) const;
 
-	// Exact paths are looked up; patterns are tried in registration order
-	std::map<std::string, std::map<Method, Handler>> pathHandlers_;
-	std::vector<PatternRoute> patternHandlers_;
+	// Tries the exact path, then patterns in registration order; null if none, with the path's other methods in allowed
+	[[nodiscard]] const Handler *match(Request &request, std::set<Method> &allowed) const;
+
+	std::map<std::string, MethodHandlers> exactRoutes_;
+	std::vector<PatternRoute> patternRoutes_;
 	Handler fallback_ = [](const Request &) {
 		return Response::error(404);
 	};
