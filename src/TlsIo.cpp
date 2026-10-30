@@ -70,12 +70,12 @@ TlsIo::TlsIo(const std::filesystem::path &certPath, const std::filesystem::path 
 
 TlsIo::~TlsIo() { SSL_CTX_free(sslCtx_); }
 
-IoResult TlsIo::handshake(int clientSocket) {
+IoStatus TlsIo::handshake(int clientSocket) {
 	SSL *ssl = sSession(clientSocket);
 	if (ssl == nullptr) {
 		ssl = SSL_new(sslCtx_);
 		if (ssl == nullptr)
-			return { .status = IoStatus::Error };
+			return IoStatus::Error;
 
 		SSL_set_fd(ssl, clientSocket);
 		g_sessions.emplace(clientSocket, ssl);
@@ -83,10 +83,10 @@ IoResult TlsIo::handshake(int clientSocket) {
 
 	const int result = SSL_accept(ssl);
 	if (result == 1)
-		return {};
+		return IoStatus::Ok;
 
-	const IoResult status = sStatusFor(ssl, result);
-	if (status.status != IoStatus::WantRead && status.status != IoStatus::WantWrite)
+	const IoStatus status = sStatusFor(ssl, result).status;
+	if (status != IoStatus::WantRead && status != IoStatus::WantWrite)
 		sDiscardSession(clientSocket);
 
 	return status;

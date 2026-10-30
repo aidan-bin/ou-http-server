@@ -14,9 +14,9 @@ namespace ou::http {
 
 class PlainIo final : public SocketIo {
 public:
-	IoResult handshake(int clientSocket) final {
+	IoStatus handshake(int clientSocket) final {
 		(void)clientSocket;
-		return {};
+		return IoStatus::Ok;
 	}
 
 	IoResult read(int clientSocket, std::span<char> buffer) final {

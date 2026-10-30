@@ -19,7 +19,7 @@ public:
 	TlsIo &operator=(TlsIo &&) = delete;
 	~TlsIo() override;
 
-	IoResult handshake(int clientSocket) final;
+	IoStatus handshake(int clientSocket) final;
 	IoResult read(int clientSocket, std::span<char> buffer) final;
 	bool hasBuffered(int clientSocket) final;
 	IoResult write(int clientSocket, std::string_view data) final;

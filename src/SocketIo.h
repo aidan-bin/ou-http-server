@@ -25,7 +25,7 @@ public:
 
 	// Call once per new connection before reading; a no-op for plain sockets.
 	// A TLS handshake still in flight reports WantRead/WantWrite and resumes on the next call.
-	virtual IoResult handshake(int clientSocket) = 0;
+	virtual IoStatus handshake(int clientSocket) = 0;
 
 	virtual IoResult read(int clientSocket, std::span<char> buffer) = 0;
 

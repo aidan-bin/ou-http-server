@@ -70,7 +70,7 @@ void BlockingLoop::handleConnection(int clientSocket, const sockaddr_in &clientA
 	(void)setsockopt(clientSocket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
 	(void)setsockopt(clientSocket, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
 
-	if (context_.io.handshake(clientSocket).status != IoStatus::Ok)
+	if (context_.io.handshake(clientSocket) != IoStatus::Ok)
 		return;
 
 	RequestReader reader(context_.maxRequestBytes);

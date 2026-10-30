@@ -9,7 +9,7 @@ void KVStore::set(std::string key, std::string value) {
 	store_.insert_or_assign(std::move(key), std::move(value));
 }
 
-std::optional<std::string> KVStore::get(std::string_view key) const {
+std::optional<std::string> KVStore::get(const std::string &key) const {
 	const std::lock_guard<std::mutex> lock(mutex_);
 	const auto it = store_.find(key);
 	if (it == store_.end())
@@ -17,13 +17,9 @@ std::optional<std::string> KVStore::get(std::string_view key) const {
 	return it->second;
 }
 
-bool KVStore::remove(std::string_view key) {
+bool KVStore::remove(const std::string &key) {
 	const std::lock_guard<std::mutex> lock(mutex_);
-	const auto it = store_.find(key);
-	if (it == store_.end())
-		return false;
-	store_.erase(it);
-	return true;
+	return store_.erase(key) == 1;
 }
 
 size_t KVStore::size() const {

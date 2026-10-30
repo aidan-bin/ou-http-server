@@ -125,7 +125,7 @@ EventLoop::Next EventLoop::step(Connection &connection) {
 }
 
 EventLoop::Next EventLoop::handshake(Connection &connection) {
-	const IoStatus status = context_.io.handshake(connection.fd.get()).status;
+	const IoStatus status = context_.io.handshake(connection.fd.get());
 	if (status != IoStatus::Ok)
 		return waitFor(connection, status);
 

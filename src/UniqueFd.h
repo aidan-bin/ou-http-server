@@ -36,8 +36,6 @@ public:
 		}
 	}
 
-	[[nodiscard]] int release() noexcept { return std::exchange(fd_, kInvalid); }
-
 private:
 	static constexpr int kInvalid = -1;
 
